@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""ReSplat inference using precomputed DA3 poses and sampled images.
+"""Run custom DA3 sampling, pose estimation, and ReSplat inference end-to-end.
 
 Run from anywhere:
     python scripts/run_scene.py /path/to/scene --gpu 0
 
-Uses <scene>/sparse/0 and <scene>/da3_work/sampled_images; no COLMAP executable.
+Runs scripts/run_da3_sampled.py automatically; no COLMAP executable.
 """
 import argparse
 import json
@@ -70,7 +70,11 @@ def has_sparse(model_dir):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("scene_dir", type=Path, help="Scene directory containing image/")
+    parser.add_argument("scene_dir", nargs="?", type=Path, default=REPO / "datasets/test", help="Scene directory containing image/")
+    parser.add_argument("--max-views", type=int, default=64)
+    parser.add_argument("--sample-mode", choices=("head", "uniform"), default="head")
+    parser.add_argument("--sample-start", type=int, default=0)
+    parser.add_argument("--force-da3", action="store_true")
     parser.add_argument("--gpu", default="0", help="CUDA device index, e.g. 0")
     parser.add_argument("--colmap", default="colmap", help="COLMAP binary")
     parser.add_argument("--matcher", choices=("exhaustive", "sequential"), default="exhaustive")
@@ -103,18 +107,22 @@ def main():
 
     timing = {}
     start = time.perf_counter()
-    mapping = prepare_images(inputs, prepared)
-    (work / "image_mapping.json").write_text(json.dumps(mapping, indent=2), encoding="utf-8")
-    timing["preprocess_s"] = round(time.perf_counter() - start, 3)
+    timing["preprocess_s"] = 0.0  # DA3 sampler handles image conversion.
 
     # Use the custom DA3 output, which already contains camera intrinsics/poses.
     # DA3 was run on sampled_images, so images and camera filenames must match.
     da3_sparse = scene / "sparse" / "0"
     da3_images = scene / "da3_work" / "sampled_images"
+    da3_command = [sys.executable, "scripts/run_da3_sampled.py", str(scene),
+                   "--max-views", str(args.max_views), "--sample-mode", args.sample_mode,
+                   "--sample-start", str(args.sample_start)]
+    if args.force_da3:
+        da3_command.append("--force-da3")
+    da3_start = time.perf_counter()
+    run(da3_command, log, cwd=REPO, env=os.environ.copy())
+    timing["da3_s"] = round(time.perf_counter() - da3_start, 3)
     if not has_sparse(da3_sparse):
-        raise RuntimeError(
-            f"DA3 poses missing: {da3_sparse}. Run python scripts/run_da3_sampled.py first."
-        )
+        raise RuntimeError(f"DA3 COLMAP export missing: {da3_sparse}")
     if not da3_images.is_dir():
         raise RuntimeError(f"DA3 sampled images missing: {da3_images}")
     sampled = sorted(da3_images.glob("*.jpg"))
@@ -133,7 +141,7 @@ def main():
         elif link.exists():
             raise RuntimeError(f"Refusing to replace existing directory: {link}")
         link.symlink_to(target.resolve(), target_is_directory=True)
-    timing["da3_input_s"] = 0.0  # DA3 is run separately and cached.
+
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     command = [
@@ -167,7 +175,8 @@ def main():
         (results / "timing.json").write_text(json.dumps(timing, indent=2), encoding="utf-8")
     (results / "run_config.json").write_text(json.dumps({
         "scene": str(scene), "checkpoint": str(CHECKPOINT),
-        "num_input_images": len(mapping), "num_context": 8,
+        "num_input_images": len(sampled), "num_context": 8,
+        "sample_mode": args.sample_mode, "sample_start": args.sample_start,
         "num_refine": args.num_refine, "selection": args.selection,
         "pose_source": "DA3", "num_da3_views": len(sampled), "gpu": args.gpu,
         "timing": timing,
