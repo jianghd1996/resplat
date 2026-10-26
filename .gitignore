@@ -175,3 +175,7 @@ CLAUDE.md
 debug*
 doc/
 notebooks/
+
+# Local copied DA3 implementation and model checkpoint symlink
+/DA3/
+/Cloud_Models
