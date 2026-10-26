@@ -75,7 +75,7 @@ def main():
     parser.add_argument("--sample-mode", choices=("head", "uniform"), default="head")
     parser.add_argument("--sample-start", type=int, default=0)
     parser.add_argument("--force-da3", action="store_true")
-    parser.add_argument("--gpu", default="0", help="CUDA device index, e.g. 0")
+    parser.add_argument("--gpu", default=None, help="Physical GPU index; defaults to inherited CUDA_VISIBLE_DEVICES or GPU 0")
     parser.add_argument("--colmap", default="colmap", help="COLMAP binary")
     parser.add_argument("--matcher", choices=("exhaustive", "sequential"), default="exhaustive")
     parser.add_argument("--num_refine", type=int, default=4, help="Official recurrent iteration count")
@@ -119,8 +119,14 @@ def main():
                    "--sample-start", str(args.sample_start)]
     # Always recompute DA3 poses: never reuse a previous reconstruction.
     da3_command.append("--force-da3")
+    gpu = args.gpu if args.gpu is not None else os.environ.get("CUDA_VISIBLE_DEVICES", "0")
+    if "," in gpu:
+        raise ValueError("Specify a single GPU via --gpu or CUDA_VISIBLE_DEVICES")
+    gpu_env = os.environ.copy()
+    gpu_env["CUDA_VISIBLE_DEVICES"] = gpu
+    print(f"[GPU] DA3 and ReSplat will both use CUDA_VISIBLE_DEVICES={gpu}", flush=True)
     da3_start = time.perf_counter()
-    run(da3_command, log, cwd=REPO, env=os.environ.copy())
+    run(da3_command, log, cwd=REPO, env=gpu_env)
     timing["da3_s"] = round(time.perf_counter() - da3_start, 3)
     if not has_sparse(da3_sparse):
         raise RuntimeError(f"DA3 COLMAP export missing: {da3_sparse}")
@@ -143,8 +149,7 @@ def main():
             raise RuntimeError(f"Refusing to replace existing directory: {link}")
         link.symlink_to(target.resolve(), target_is_directory=True)
 
-    env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = args.gpu
+    env = gpu_env
     command = [
         sys.executable, "scripts/infer_colmap.py",
         "--scene_path", undistorted,
@@ -181,7 +186,7 @@ def main():
         "target_selection": "all",
         "sample_mode": args.sample_mode, "sample_start": args.sample_start,
         "num_refine": args.num_refine, "selection": args.selection,
-        "pose_source": "DA3", "num_da3_views": len(sampled), "gpu": args.gpu,
+        "pose_source": "DA3", "num_da3_views": len(sampled), "gpu": gpu,
         "timing": timing,
     }, indent=2), encoding="utf-8")
     print(f"\n[success] All results: {results}")
