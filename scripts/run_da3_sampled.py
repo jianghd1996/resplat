@@ -22,7 +22,7 @@ WORK_DIR = ROOT / "datasets/test"
 MAX_VIEWS = 64
 SAMPLE_MODE = "head"  # "head": first 64 consecutive frames; "uniform": global coverage
 SAMPLE_START = 0
-DA3_DIR = Path("/home/z00566689/dev/mnt/Hackathon_dev/resplat/DA3")
+DA3_DIR = ROOT / "DA3"  # resolved from this script, never a hard-coded mount path
 DA3_MODEL_PATH = ROOT / "Cloud_Models/Saliency-Face-DA3/besthumanmodel_lr1e_6_ckpt2.pt"
 VIEW_NUM = 81
 CROP_RATIO = 1.0
@@ -147,10 +147,22 @@ def main():
     os.chdir(ROOT)
     # Support DA3 placed at the user-specified path even when the repository
     # is accessed through a different mount or symlink.
-    da3_dir = DA3_DIR if DA3_DIR.is_dir() else ROOT / "DA3"
-    if not (da3_dir / "run_da3_full_crop_dev.py").is_file():
-        raise FileNotFoundError(f"DA3 module missing: {da3_dir / 'run_da3_full_crop_dev.py'}")
-    sys.path.insert(0, str(da3_dir.parent))
+    # Accept either a copied DA3/ directory at repo root or its nested source layout.
+    candidates = [
+        ROOT / "DA3" / "run_da3_full_crop_dev.py",
+        ROOT / "DA3" / "DA3" / "run_da3_full_crop_dev.py",
+        ROOT / "third_party" / "Depth-Anything-3" / "DA3" / "run_da3_full_crop_dev.py",
+    ]
+    da3_file = next((p for p in candidates if p.is_file()), None)
+    if da3_file is None:
+        searched = "\\n  ".join(map(str, candidates))
+        raise FileNotFoundError(
+            "Cannot find the custom DA3 implementation. Searched:\\n  "
+            + searched
+            + "\\nCheck whether the copied DA3 directory is present; "
+              "this script does not delete or download it."
+        )
+    sys.path.insert(0, str(da3_file.parent.parent))
     from DA3.run_da3_full_crop_dev import run_DA3
 
     model_path = args.da3_model.expanduser()
