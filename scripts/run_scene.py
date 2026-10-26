@@ -117,8 +117,8 @@ def main():
     da3_command = [sys.executable, "scripts/run_da3_sampled.py", str(scene),
                    "--max-views", str(args.max_views), "--sample-mode", args.sample_mode,
                    "--sample-start", str(args.sample_start)]
-    if args.force_da3:
-        da3_command.append("--force-da3")
+    # Always recompute DA3 poses: never reuse a previous reconstruction.
+    da3_command.append("--force-da3")
     da3_start = time.perf_counter()
     run(da3_command, log, cwd=REPO, env=os.environ.copy())
     timing["da3_s"] = round(time.perf_counter() - da3_start, 3)
