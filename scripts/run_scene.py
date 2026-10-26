@@ -79,6 +79,7 @@ def main():
     parser.add_argument("--colmap", default="colmap", help="COLMAP binary")
     parser.add_argument("--matcher", choices=("exhaustive", "sequential"), default="exhaustive")
     parser.add_argument("--num_refine", type=int, default=4, help="Official recurrent iteration count")
+    parser.add_argument("--num-context", type=int, default=64, help="Use all 64 sampled images as ReSplat context")
     parser.add_argument("--selection", choices=("fps", "uniform"), default="fps")
     parser.add_argument("--skip_video", action="store_true")
     parser.add_argument("--skip_eval", action="store_true")
@@ -126,8 +127,8 @@ def main():
     if not da3_images.is_dir():
         raise RuntimeError(f"DA3 sampled images missing: {da3_images}")
     sampled = sorted(da3_images.glob("*.jpg"))
-    if len(sampled) < 8:
-        raise RuntimeError(f"ReSplat needs at least 8 DA3 views, found {len(sampled)}")
+    if len(sampled) < args.num_context:
+        raise RuntimeError(f"Requested {args.num_context} context views but only {len(sampled)} DA3 views exist")
     # ReSplat reads poses from sparse/0 and matching images from images/.
     # Symlinks avoid copying hundreds of MB; no COLMAP binary needed.
     undistorted = work / "da3_scene"
@@ -151,7 +152,8 @@ def main():
         "--sparse_dir", "sparse/0",
         "--model_preset", "dl3dv_8v_512x960",
         "--checkpoint", CHECKPOINT,
-        "--num_context", "8",
+        "--num_context", str(args.num_context),
+        "--target_selection", "all",
         "--num_refine", str(args.num_refine),
         "--context_selection", args.selection,
         "--start_frame", "0",
@@ -175,7 +177,8 @@ def main():
         (results / "timing.json").write_text(json.dumps(timing, indent=2), encoding="utf-8")
     (results / "run_config.json").write_text(json.dumps({
         "scene": str(scene), "checkpoint": str(CHECKPOINT),
-        "num_input_images": len(sampled), "num_context": 8,
+        "num_input_images": len(sampled), "num_context": args.num_context,
+        "target_selection": "all",
         "sample_mode": args.sample_mode, "sample_start": args.sample_start,
         "num_refine": args.num_refine, "selection": args.selection,
         "pose_source": "DA3", "num_da3_views": len(sampled), "gpu": args.gpu,
