@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""One-command black-box ReSplat inference for <scene>/image/*.
+"""ReSplat inference using precomputed DA3 poses and sampled images.
 
 Run from anywhere:
     python scripts/run_scene.py /path/to/scene --gpu 0
 
-Only wraps COLMAP and the upstream scripts/infer_colmap.py; does not alter ReSplat.
+Uses <scene>/sparse/0 and <scene>/da3_work/sampled_images; no COLMAP executable.
 """
 import argparse
 import json
@@ -88,8 +88,7 @@ def main():
         parser.error(f"Missing input directory: {inputs}")
     if not CHECKPOINT.is_file():
         parser.error(f"Checkpoint not found: {CHECKPOINT}")
-    if shutil.which(args.colmap) is None:
-        parser.error(f"COLMAP executable not found: {args.colmap}")
+    # DA3 mode does not require the COLMAP executable.
 
     work = scene / "resplat_work"
     prepared = work / "prepared_images"
@@ -108,50 +107,33 @@ def main():
     (work / "image_mapping.json").write_text(json.dumps(mapping, indent=2), encoding="utf-8")
     timing["preprocess_s"] = round(time.perf_counter() - start, 3)
 
-    colmap_start = time.perf_counter()
-    if args.force_colmap:
-        if sfm.exists():
-            shutil.rmtree(sfm)
-    if not has_sparse(undistorted / "sparse/0"):
-        sfm.mkdir(parents=True, exist_ok=True)
-        sparse_root.mkdir(parents=True, exist_ok=True)
-        if not has_sparse(sparse_root / "0"):
-            # Recreate the feature database when reconstruction is incomplete.
-            if db.exists():
-                db.unlink()
-            run([args.colmap, "feature_extractor",
-                 "--database_path", db, "--image_path", prepared,
-                 "--ImageReader.camera_model", "SIMPLE_RADIAL",
-                 "--ImageReader.single_camera", "1",
-                 "--SiftExtraction.use_gpu", "1"], log)
-            run([args.colmap, f"{args.matcher}_matcher",
-                 "--database_path", db, "--SiftMatching.use_gpu", "1"], log)
-            run([args.colmap, "mapper",
-                 "--database_path", db, "--image_path", prepared,
-                 "--output_path", sparse_root], log)
-        models = sorted(p for p in sparse_root.iterdir() if p.is_dir() and has_sparse(p))
-        if not models:
-            raise RuntimeError("COLMAP failed to register images. Check overlap, blur and COLMAP log.")
-        # Select the largest reconstruction (by registered images, via model_analyzer if available).
-        model = models[0]
-        if len(models) > 1:
-            model = max(models, key=lambda p: (p / "images.bin").stat().st_size
-                        if (p / "images.bin").exists() else 0)
-        run([args.colmap, "image_undistorter",
-             "--image_path", prepared, "--input_path", model,
-             "--output_path", undistorted, "--output_type", "COLMAP"], log)
-        # COLMAP image_undistorter writes sparse/ in some versions; normalize to sparse/0.
-        if has_sparse(undistorted / "sparse") and not has_sparse(undistorted / "sparse/0"):
-            (undistorted / "sparse/0").mkdir(parents=True, exist_ok=True)
-            for name in ("cameras.bin", "images.bin", "points3D.bin",
-                         "cameras.txt", "images.txt", "points3D.txt"):
-                src = undistorted / "sparse" / name
-                if src.exists():
-                    shutil.move(str(src), str(undistorted / "sparse/0" / name))
-    if not has_sparse(undistorted / "sparse/0"):
-        raise RuntimeError(f"Undistorted COLMAP model not found: {undistorted / 'sparse/0'}")
-    timing["colmap_s"] = round(time.perf_counter() - colmap_start, 3)
-
+    # Use the custom DA3 output, which already contains camera intrinsics/poses.
+    # DA3 was run on sampled_images, so images and camera filenames must match.
+    da3_sparse = scene / "sparse" / "0"
+    da3_images = scene / "da3_work" / "sampled_images"
+    if not has_sparse(da3_sparse):
+        raise RuntimeError(
+            f"DA3 poses missing: {da3_sparse}. Run python scripts/run_da3_sampled.py first."
+        )
+    if not da3_images.is_dir():
+        raise RuntimeError(f"DA3 sampled images missing: {da3_images}")
+    sampled = sorted(da3_images.glob("*.jpg"))
+    if len(sampled) < 8:
+        raise RuntimeError(f"ReSplat needs at least 8 DA3 views, found {len(sampled)}")
+    # ReSplat reads poses from sparse/0 and matching images from images/.
+    # Symlinks avoid copying hundreds of MB; no COLMAP binary needed.
+    undistorted = work / "da3_scene"
+    (undistorted / "sparse").mkdir(parents=True, exist_ok=True)
+    for name, target in (("images", da3_images), ("sparse/0", da3_sparse)):
+        link = undistorted / name
+        if link.is_symlink():
+            if link.resolve() == target.resolve():
+                continue
+            link.unlink()
+        elif link.exists():
+            raise RuntimeError(f"Refusing to replace existing directory: {link}")
+        link.symlink_to(target.resolve(), target_is_directory=True)
+    timing["da3_input_s"] = 0.0  # DA3 is run separately and cached.
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = args.gpu
     command = [
@@ -165,7 +147,7 @@ def main():
         "--num_refine", str(args.num_refine),
         "--context_selection", args.selection,
         "--start_frame", "0",
-        "--frame_distance", str(len(mapping)),
+        "--frame_distance", str(len(sampled)),
         "--render_chunk_size", str(args.render_chunk_size),
         "--output_dir", results,
         "--save_images", "--save_ply", "--save_depth",
@@ -187,7 +169,7 @@ def main():
         "scene": str(scene), "checkpoint": str(CHECKPOINT),
         "num_input_images": len(mapping), "num_context": 8,
         "num_refine": args.num_refine, "selection": args.selection,
-        "matcher": args.matcher, "gpu": args.gpu,
+        "pose_source": "DA3", "num_da3_views": len(sampled), "gpu": args.gpu,
         "timing": timing,
     }, indent=2), encoding="utf-8")
     print(f"\n[success] All results: {results}")
