@@ -20,6 +20,8 @@ EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 # ===================== User configuration =====================
 WORK_DIR = ROOT / "datasets/test"
 MAX_VIEWS = 64
+SAMPLE_MODE = "head"  # "head": first 64 consecutive frames; "uniform": global coverage
+SAMPLE_START = 0
 DA3_MODEL_PATH = ROOT / "Cloud_Models/Saliency-Face-DA3/besthumanmodel_lr1e_6_ckpt2.pt"
 VIEW_NUM = 81
 CROP_RATIO = 1.0
@@ -31,13 +33,19 @@ def natural_key(path):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", path.name)]
 
 
-def sample_indices(n, max_views):
-    if n <= max_views:
-        return list(range(n))
-    return [(i * (n - 1)) // (max_views - 1) for i in range(max_views)]
+def sample_indices(n, max_views, mode="head", start=0):
+    if mode == "head":
+        if start < 0 or start >= n:
+            raise ValueError(f"sample start {start} outside [0, {n})")
+        return list(range(start, min(n, start + max_views)))
+    if mode == "uniform":
+        if n <= max_views:
+            return list(range(n))
+        return [(i * (n - 1)) // (max_views - 1) for i in range(max_views)]
+    raise ValueError(f"Unknown sample mode: {mode}")
 
 
-def prepare_sampled_images(image_dir, output_dir, max_views=64, force=False):
+def prepare_sampled_images(image_dir, output_dir, max_views=64, force=False, mode=SAMPLE_MODE, start=SAMPLE_START):
     if max_views < 2:
         raise ValueError("max_views must be >= 2")
     files = sorted(
@@ -46,10 +54,12 @@ def prepare_sampled_images(image_dir, output_dir, max_views=64, force=False):
     )
     if not files:
         raise FileNotFoundError(f"No supported images in {image_dir}")
-    indices = sample_indices(len(files), max_views)
+    indices = sample_indices(len(files), max_views, mode=mode, start=start)
     selected = [files[i] for i in indices]
     manifest = {
         "source_dir": str(image_dir.resolve()),
+        "sample_mode": mode,
+        "sample_start": start,
         "source_count": len(files),
         "selected_count": len(selected),
         "selected_indices": indices,
@@ -101,6 +111,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("scene_dir", nargs="?", type=Path, default=WORK_DIR)
     parser.add_argument("--max-views", type=int, default=MAX_VIEWS)
+    parser.add_argument("--sample-mode", choices=("head", "uniform"), default=SAMPLE_MODE)
+    parser.add_argument("--sample-start", type=int, default=SAMPLE_START)
     parser.add_argument("--da3-model", type=Path, default=DA3_MODEL_PATH)
     parser.add_argument("--view-num", type=int, default=VIEW_NUM)
     parser.add_argument("--crop-ratio", type=float, default=CROP_RATIO)
@@ -116,7 +128,7 @@ def main():
     work = scene / "da3_work"
     sample_dir = work / "sampled_images"
     start = time.perf_counter()
-    selected, cached = prepare_sampled_images(image_dir, sample_dir, args.max_views, args.force_sample)
+    selected, cached = prepare_sampled_images(image_dir, sample_dir, args.max_views, args.force_sample, mode=args.sample_mode, start=args.sample_start)
     if args.sample_only:
         return
 
