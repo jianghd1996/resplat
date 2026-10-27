@@ -1,28 +1,22 @@
 # DL3DV competition pipeline (baseline)
 
 This adds an external one-command wrapper around the repository's existing
-COLMAP inference path. It does not edit ReSplat's network, checkpoint, or
-forward pass. The first Module B adapter is an **identity baseline**: it copies
-the generated PLY and verifies that the bytes are unchanged. It is a harness
-for local measurements, not a quality-improving method.
+COLMAP inference path. It does not change ReSplat's network, checkpoint, or
+forward computation. The first Module B adapter is an **identity baseline**:
+it copies the generated PLY and verifies that the bytes are unchanged. It is
+a harness for local measurements, not a quality-improving method.
 
 ## Official demo
 
-Download and extract the DL3DV COLMAP demo linked from the upstream README into
-the repository's `datasets/dl3dv-colmap-demo` directory. The selected scene
-folder must contain `images_4/` and `sparse/0/` (COLMAP binary or text files).
-The default preset expects the 8-view 512x960 checkpoint:
+Download and extract the DL3DV COLMAP demo linked from the upstream README.
+The selected scene folder must contain `images_4/` and `sparse/0/` (COLMAP
+binary or text files). The default preset expects the 8-view 512x960 checkpoint:
 
 ```bash
 python run_pipeline.py \
   --scene datasets/dl3dv-colmap-demo/02267acf6fb98de36173bf4e7db9734c8c421dcb00267e42964dc15134cbb1be \
-  --output results/competition/demo \
-  --t-iter-sec 0.01
+  --output results/competition/demo
 ```
-
-Replace `0.01` with the measured seconds per iteration of classic 3DGS on the
-same machine. If omitted, inference and quality metrics are still produced,
-but time-efficiency and total competition scores are left unscored.
 
 Model weights are expected under `pretrained/` as described in
 `MODEL_ZOO.md`. To use the downloaded view-count/resolution variants, select
@@ -37,6 +31,28 @@ the matching preset:
 For example: `--model-preset dl3dv_16v_256x448`. Keep the chosen preset and
 all other parameters fixed across evaluation scenes; do not tune by scene.
 
+## Timing definitions
+
+The model is loaded before the warm scene timer starts. The timer then covers
+COLMAP/data loading, Module A view selection and preprocessing, ReSplat
+inference, rendering, and saving the PLY/PNG outputs. PSNR/SSIM/LPIPS are
+offline evaluation metrics; their compute time is recorded separately and is
+excluded from the 30-second practical target. The report also preserves the
+cold subprocess wall time, which includes model load.
+
+Module A selection and ReSplat run inside the existing upstream inference
+entry point, so their times are not separated; the report labels them as a
+combined stage. No ReSplat forward-path instrumentation or computation changes
+are made.
+
+The **30-second end-to-end target is a practical engineering target**, not a
+replacement for the official Module B limit. The official score maps PSNR
+15–40 dB to 0–20 points, SSIM 0.70–0.95 to 0–20, LPIPS 0.25–0.05 to 0–40,
+and Module B runtime to 0–20 (full time points at 10% or less of the
+30,000-iteration budget; zero at or above the budget). Values outside metric
+ranges are clamped. Pass `--t-iter-sec` with measured classic 3DGS seconds per
+iteration to calculate the official time component and total score.
+
 ## Outputs
 
 - `resplat/gaussians.ply`: unchanged ReSplat export.
@@ -44,33 +60,13 @@ all other parameters fixed across evaluation scenes; do not tune by scene.
   (identical to input for this baseline).
 - `resplat/rendered/*.png`: rendered RGB PNGs for all non-context views.
 - `resplat/metrics.json`: mean and per-view PSNR, SSIM, and LPIPS.
-- `performance_quality_report.json`: timing, budget check, component scores,
-  and total score when all required inputs are available.
+- `resplat/scene_timing.json`: model loading, warm scene processing, and
+  quality-metric evaluation timings.
+- `performance_quality_report.json`: timings, budget checks, and scores.
 
-The **30-second end-to-end target is a practical engineering target**, not a
-replacement for the official Module B limit. The report checks it separately.
-End-to-end time includes the upstream inference call and Module B output; the
-upstream call includes FPS selection (Module A), ReSplat inference, rendering,
-PNG/PLY export, and metric computation. FPS and forward inference are not
-separately timed because this pipeline leaves the upstream inference path
-untouched.
-
-The official score maps PSNR 15–40 dB to 0–20 points, SSIM 0.70–0.95 to 0–20,
-LPIPS 0.25–0.05 to 0–40, and Module B runtime to 0–20 (full time points at
-10% or less of the 30,000-iteration budget; zero at or above the budget).
-Values outside the metric ranges are clamped at the range endpoints.
-
-## Timing interpretation
-
-The report records the upstream Module A + ReSplat pipeline, Module B, and
-end-to-end wall times. The upstream pipeline time includes inference setup,
-FPS selection, ReSplat inference, rendering, metric computation, and output
-saving. Only Module B is checked against the official 30,000-iteration
-allowance. For this baseline Module B is PLY copy-and-verify time. A future
-optimization must replace the adapter while preserving its interface and use
-the same scene-independent parameters. The official check uses the strict
-condition `module_b_seconds < 30000 * t_iter_sec`; the separate practical
-target is `end_to_end_seconds <= 30`.
+The official Module B check is the strict condition
+`module_b_seconds < 30000 * t_iter_sec`. The separate practical target is
+`warm_end_to_end_seconds <= 30`.
 
 ## Requirements
 

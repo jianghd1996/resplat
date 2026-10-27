@@ -100,7 +100,24 @@ def main() -> int:
     # stage because the upstream path is treated as a black box.
     pipeline_start = time.perf_counter()
     subprocess.run(cmd, cwd=repo_root, check=True)
-    inference_seconds = time.perf_counter() - pipeline_start
+    inference_process_wall_seconds = time.perf_counter() - pipeline_start
+
+    stage_timing_path = inference_dir / "scene_timing.json"
+    if not stage_timing_path.is_file():
+        raise FileNotFoundError(
+            f"Missing warm-scene timing file {stage_timing_path}; "
+            "update scripts/infer_colmap.py from the competition branch."
+        )
+    with stage_timing_path.open(encoding="utf-8") as f:
+        stage_timing = json.load(f)
+    model_load_seconds = float(stage_timing["model_load_seconds"])
+    scene_processing_seconds = float(stage_timing["scene_processing_seconds"])
+    quality_metric_seconds = float(
+        stage_timing.get("quality_metric_evaluation_seconds", 0.0)
+    )
+    output_generation_seconds = max(
+        0.0, scene_processing_seconds - quality_metric_seconds
+    )
 
     source_ply = inference_dir / "gaussians.ply"
     if not source_ply.is_file():
@@ -119,7 +136,8 @@ def main() -> int:
     refined_ply = output / "gaussians_refined.ply"
     shutil.copy2(module_b_ply, refined_ply)
     module_b_seconds = time.perf_counter() - module_b_start
-    end_to_end_seconds = time.perf_counter() - pipeline_start
+    end_to_end_seconds = output_generation_seconds + module_b_seconds
+    evaluation_end_to_end_seconds = scene_processing_seconds + module_b_seconds
 
     metrics_path = inference_dir / "metrics.json"
     metrics = None
@@ -133,9 +151,14 @@ def main() -> int:
         preset=args.model_preset,
         checkpoint=str(args.checkpoint) if args.checkpoint else None,
         module_b=module_b_metadata,
-        inference_seconds=inference_seconds,
+        inference_process_wall_seconds=inference_process_wall_seconds,
+        model_load_seconds=model_load_seconds,
+        scene_processing_seconds=scene_processing_seconds,
+        quality_metric_seconds=quality_metric_seconds,
+        output_generation_seconds=output_generation_seconds,
         module_b_seconds=module_b_seconds,
         end_to_end_seconds=end_to_end_seconds,
+        evaluation_end_to_end_seconds=evaluation_end_to_end_seconds,
         t_iter_sec=args.t_iter_sec,
         metrics=metrics,
         rendered_png_dir=str(inference_dir / "rendered"),
@@ -149,8 +172,13 @@ def main() -> int:
     print(f"  PLY: {refined_ply}")
     print(f"  PNG renders: {inference_dir / 'rendered'}")
     print(f"  Report: {report_path}")
-    print(f"  Module A + ReSplat pipeline: {inference_seconds:.3f}s")
-    print(f"  End-to-end (A + ReSplat + B): {end_to_end_seconds:.3f}s")
+    print(f"  Model load (excluded from warm target): {model_load_seconds:.3f}s")
+    print(f"  Scene processing incl. metric evaluation: {scene_processing_seconds:.3f}s")
+    print(f"  Quality metric evaluation (reported separately): {quality_metric_seconds:.3f}s")
+    print(f"  Data-to-saved-output (A + ReSplat, metric eval excluded): {output_generation_seconds:.3f}s")
+    print(f"  End-to-end warm (A + ReSplat + B): {end_to_end_seconds:.3f}s")
+    print(f"  End-to-end including metric evaluation: {evaluation_end_to_end_seconds:.3f}s")
+    print(f"  Cold subprocess wall time: {inference_process_wall_seconds:.3f}s")
     print(f"  30s practical target: {report['practical_runtime_target']['status']}")
     if report["score"]["total"] is None:
         print("  Competition score: partial (supply --t-iter-sec to score time efficiency)")

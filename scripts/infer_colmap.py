@@ -44,6 +44,7 @@ import collections
 import json
 import os
 import struct
+import time
 import warnings
 import sys
 from pathlib import Path
@@ -58,6 +59,9 @@ from src.misc.stablize_camera import render_stabilization_path
 
 warnings.filterwarnings("ignore")
 torch.set_float32_matmul_precision("high")
+
+# Evaluation timing is reported separately from the output-generation runtime.
+STAGE_TIMINGS = {}
 
 
 # =============================================================================
@@ -1498,6 +1502,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
     # Evaluate metrics on target views (rendered vs ground truth)
     if not args.no_eval:
         print(f"\nEvaluating metrics on target views...")
+        metric_start = time.perf_counter()
         metrics = compute_metrics(
             rendered, target_images, target_image_names, output_dir,
             device=args.device,
@@ -1518,6 +1523,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
         metrics_path = os.path.join(output_dir, "metrics.json")
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)
+        STAGE_TIMINGS["quality_metric_seconds"] = time.perf_counter() - metric_start
 
     print(f"\nDone! Results saved to {output_dir}")
     return encoder, decoder, data_shim
@@ -1547,6 +1553,44 @@ def write_aggregate_metrics(all_metrics, output_dir):
     print(f"\nAggregate metrics ({len(psnrs)} scenes):")
     print(f"  PSNR: {summary['mean_psnr']}, SSIM: {summary['mean_ssim']}, "
           f"LPIPS: {summary['mean_lpips']}")
+
+
+def preload_model_for_scene(args, scene_path):
+    """Load model weights before starting the scene-processing timer.
+
+    Only image metadata is inspected to determine the configured input shape;
+    COLMAP files and scene image tensors are loaded after this function returns.
+    """
+    image_root = os.path.join(scene_path, args.images_dir)
+    image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+    image_paths = sorted(
+        os.path.join(image_root, name)
+        for name in os.listdir(image_root)
+        if os.path.splitext(name)[1].lower() in image_extensions
+    )
+    if not image_paths:
+        raise FileNotFoundError(f"No supported images found in {image_root}")
+
+    with Image.open(image_paths[0]) as image:
+        orig_w, orig_h = image.size
+    target_shape = compute_target_shape(
+        orig_h, orig_w, args.max_resolution, args.image_shape
+    )
+
+    print(f"\nPreloading model before scene-processing timer...")
+    model_start = time.perf_counter()
+    encoder, decoder, data_shim = build_model(
+        experiment=args.experiment,
+        checkpoint=args.checkpoint,
+        num_refine=args.num_refine,
+        image_shape=target_shape,
+        overrides=args.overrides,
+        device=args.device,
+        no_strict_load=True,
+    )
+    model_load_seconds = time.perf_counter() - model_start
+    print(f"  Model loaded on {args.device} in {model_load_seconds:.3f}s")
+    return encoder, decoder, data_shim, model_load_seconds
 
 
 def main():
@@ -1661,9 +1705,33 @@ def main():
         if all_metrics and not args.no_eval:
             write_aggregate_metrics(all_metrics, args.output_dir)
     else:
-        # Single scene mode (existing behavior)
+        # Single-scene competition path: preload model, then time scene input
+        # reading through inference, rendering, metric computation, and saving.
         scene_name = os.path.basename(os.path.normpath(args.scene_path))
-        run_scene(args, args.scene_path, scene_name, args.output_dir)
+        encoder, decoder, data_shim, model_load_seconds = preload_model_for_scene(
+            args, args.scene_path
+        )
+        scene_start = time.perf_counter()
+        run_scene(
+            args, args.scene_path, scene_name, args.output_dir,
+            encoder, decoder, data_shim,
+        )
+        scene_processing_seconds = time.perf_counter() - scene_start
+        os.makedirs(args.output_dir, exist_ok=True)
+        with open(os.path.join(args.output_dir, "scene_timing.json"), "w") as f:
+            json.dump({
+                "model_load_seconds": model_load_seconds,
+                "scene_processing_seconds": scene_processing_seconds,
+                "quality_metric_evaluation_seconds": STAGE_TIMINGS.get(
+                    "quality_metric_seconds", 0.0
+                ),
+                "scene_processing_scope": (
+                    "COLMAP data load, view selection, image preprocessing, "
+                    "ReSplat inference, rendering, metric computation, and result saving"
+                ),
+                "model_preloaded_before_scene_timer": True,
+            }, f, indent=2)
+        print(f"\nScene processing (model already loaded): {scene_processing_seconds:.3f}s")
 
 
 if __name__ == "__main__":
