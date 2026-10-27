@@ -510,13 +510,14 @@ def farthest_point_sample(xyz, npoint):
     return centroids
 
 
-def select_context_views(c2w, num_context, strategy="fps"):
+def select_context_views(c2w, num_context, strategy="fps", seed=0):
     """Select context view indices from all available views.
 
     Args:
         c2w: [N, 4, 4] camera-to-world matrices
         num_context: number of context views to select
-        strategy: "fps" | "uniform"
+        strategy: "fps" | "uniform" | "random"
+        seed: random seed used by the random strategy
     Returns:
         context_indices: sorted numpy array of indices
     """
@@ -530,6 +531,9 @@ def select_context_views(c2w, num_context, strategy="fps"):
         return np.sort(indices)
     elif strategy == "uniform":
         return np.linspace(0, N - 1, num_context, dtype=int)
+    elif strategy == "random":
+        rng = np.random.default_rng(seed)
+        return np.sort(rng.choice(N, size=num_context, replace=False))
     else:
         raise ValueError(f"Unknown context selection strategy: {strategy}")
 
@@ -1268,8 +1272,14 @@ def parse_args():
         "--context_selection",
         type=str,
         default="fps",
-        choices=["fps", "uniform"],
-        help="Strategy for selecting context views: fps (farthest point sampling) or uniform",
+        choices=["fps", "uniform", "random"],
+        help="Strategy for selecting context views: camera-position FPS, uniform indices, or seeded random",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Seed for reproducible random context-view selection",
     )
     parser.add_argument(
         "--target_selection",
@@ -1435,7 +1445,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
     num_context = min(num_context, num_total)
 
     context_indices = select_context_views(
-        scene_data["c2w"], num_context, args.context_selection,
+        scene_data["c2w"], num_context, args.context_selection, args.seed,
     )
     target_indices = select_target_views(
         num_total, context_indices, args.target_selection, args.num_target
@@ -1577,6 +1587,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
         # Append config info to metrics file for reproducibility
         metrics["config"] = {
             "context_selection": args.context_selection,
+            "selection_seed": args.seed,
             "target_selection": args.target_selection,
             "num_context": len(context_indices),
             "num_target": len(target_indices),

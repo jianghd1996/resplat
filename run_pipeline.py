@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
                         help="Optional context-view override. Keep fixed across scenes.")
     parser.add_argument("--num-refine", type=int, default=None,
                         help="Optional ReSplat preset refinement override.")
+    parser.add_argument("--context-selection", choices=("fps", "uniform", "random"),
+                        default="fps",
+                        help="Context view selection strategy.")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Seed for reproducible random context selection.")
     parser.add_argument("--images-dir", default="images_4",
                         help="Image directory relative to --scene.")
     parser.add_argument("--sparse-dir", default="sparse/0",
@@ -81,6 +86,8 @@ def main() -> int:
         "--save_ply",
         "--save_images",
         "--max_save_images", "0",
+        "--context_selection", args.context_selection,
+        "--seed", str(args.seed),
     ]
     if args.checkpoint:
         cmd.extend(["--checkpoint", str(args.checkpoint.expanduser().resolve())])
@@ -173,6 +180,10 @@ def main() -> int:
     report["quality"]["rendered_resolution"] = stage_timing.get("output_resolution")
     report["quality"]["metric_resolution"] = stage_timing.get("input_resolution")
     report["quality"]["metrics_compare_against_original_input_images"] = True
+    report["quality"]["context_selection"] = metrics_config.get(
+        "context_selection", args.context_selection
+    )
+    report["quality"]["selection_seed"] = metrics_config.get("selection_seed", args.seed)
     report["quality"]["target_selection"] = metrics_config.get("target_selection", "all")
     report["quality"]["evaluation_view_count"] = metrics_config.get("num_target")
     report["quality"]["evaluation_includes_context_views"] = metrics_config.get(

@@ -135,7 +135,7 @@ def build_report(*, scene, output, preset, checkpoint, module_b,
             },
         },
         "quality": {
-            "evaluation_split": "all non-context COLMAP views selected by infer_colmap.py",
+            "evaluation_split": "all selected COLMAP views, including context views",
             "metrics": metric_values,
             "rendered_png_dir": rendered_png_dir,
             "refined_ply": ply_path,
