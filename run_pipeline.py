@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run the DL3DV competition baseline on one COLMAP scene.
 
-ReSplat remains a black box: this wrapper calls scripts/infer_colmap.py unchanged,
-then sends its PLY through the external Module B adapter.
+The ReSplat forward path remains untouched. The inference adapter performs
+native-resolution final rendering and sends the exported PLY to Module B.
 """
 from __future__ import annotations
 
@@ -94,10 +94,9 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    # This is the unchanged upstream inference entry point. The upstream
-    # script includes Module A's FPS view selection plus ReSplat inference,
-    # rendering, export, and metric computation; these remain one measured
-    # stage because the upstream path is treated as a black box.
+    # The model forward path is unchanged. The COLMAP adapter performs
+    # Module A's FPS selection, inference, native-resolution rendering,
+    # output saving, and metric evaluation in one subprocess.
     pipeline_start = time.perf_counter()
     subprocess.run(cmd, cwd=repo_root, check=True)
     inference_process_wall_seconds = time.perf_counter() - pipeline_start
@@ -164,6 +163,14 @@ def main() -> int:
         rendered_png_dir=str(inference_dir / "rendered"),
         ply_path=str(refined_ply),
     )
+    report["model"]["forward_input_resolution"] = stage_timing.get(
+        "model_input_resolution"
+    )
+    report["quality"]["input_resolution"] = stage_timing.get("input_resolution")
+    report["quality"]["rendered_resolution"] = stage_timing.get("output_resolution")
+    report["quality"]["metric_resolution"] = stage_timing.get("input_resolution")
+    report["quality"]["metrics_compare_against_original_input_images"] = True
+
     report_path = output / "performance_quality_report.json"
     with report_path.open("w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False)
@@ -171,6 +178,7 @@ def main() -> int:
     print(f"\nPipeline complete: {output}")
     print(f"  PLY: {refined_ply}")
     print(f"  PNG renders: {inference_dir / 'rendered'}")
+    print(f"  Render/metric resolution: {stage_timing.get('output_resolution')}")
     print(f"  Report: {report_path}")
     print(f"  Model load (excluded from warm target): {model_load_seconds:.3f}s")
     print(f"  Scene processing incl. metric evaluation: {scene_processing_seconds:.3f}s")

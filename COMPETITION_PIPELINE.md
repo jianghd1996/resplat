@@ -19,35 +19,39 @@ python run_pipeline.py \
 ```
 
 Model weights are expected under `pretrained/` as described in
-`MODEL_ZOO.md`. To use the downloaded view-count/resolution variants, select
-the matching preset:
+`MODEL_ZOO.md`. Keep the selected preset and parameters fixed across scenes.
 
-- `dl3dv_8v_512x960` (default)
-- `dl3dv_8v_256x448`
-- `dl3dv_16v_256x448`
-- `dl3dv_32v_256x448`
-- `dl3dv_8v_256x448_large`
+## Resolution and metrics
 
-Keep the chosen preset and all other parameters fixed across evaluation scenes.
+The selected preset controls the resolution used to prepare network inputs.
+After the unchanged ReSplat forward pass, the final Gaussian model is rendered
+again at the native pixel dimensions of the source images under `images_4/`.
+The saved `resplat/rendered/*.png` files use that native resolution.
+PSNR/SSIM/LPIPS compare these final renders against the original source images
+at the same native resolution, without resizing either side for metric
+calculation. This means low-resolution presets still receive native-resolution
+final renders for scoring; their network input remains at the preset size.
+
+The current implementation expects all images in a scene to have a uniform
+native resolution and fails explicitly if they do not. For the demo scene,
+the expected source/output/metric resolution is 537x954, while the 512x960
+preset's network input is resized to 512x896.
 
 ## Timing and score definitions
 
 The model is loaded before the warm scene timer starts. The timer then covers
 COLMAP/data loading, Module A view selection and preprocessing, ReSplat
-inference, rendering, and saving the PLY/PNG outputs. PSNR/SSIM/LPIPS are
-offline evaluation metrics; their compute time is recorded separately and is
-excluded from the project's practical time score. Module B runtime is included
-in the end-to-end time.
+inference, final native-resolution rendering, and saving the PLY/PNG outputs.
+PSNR/SSIM/LPIPS are offline evaluation metrics; their compute time is recorded
+separately and excluded from the project's practical time score. Module B
+runtime is included in the end-to-end time.
 
 For the project score, the time component is calculated from total warm
-end-to-end time against a fixed 30-second budget. It follows the stated linear
-rule: full time points at 10% of budget or less (3 seconds), zero at or above
-30 seconds, with linear interpolation in between. This project score basis
-reflects the user's chosen practical target.
-
-The original official Module B constraint is also reported independently:
-`Module B < 30000 * T_iter`. Pass `--t-iter-sec` to check it. This parameter
-is no longer required to calculate the 30-second total-time score.
+end-to-end time against a fixed 30-second budget. Full time points are awarded
+at 10% of budget or less (3 seconds), zero at or above 30 seconds, and values
+between are linearly interpolated. The original official Module B constraint
+is also reported independently: `Module B < 30000 * T_iter`. Pass
+`--t-iter-sec` to check it.
 
 Module A selection and ReSplat run inside the existing inference entry point,
 so their times are not separated; the report labels them as a combined stage.
@@ -58,11 +62,12 @@ No ReSplat forward computation is changed.
 - `resplat/gaussians.ply`: unchanged ReSplat export.
 - `gaussians_refined.ply` and `module_b/gaussians.ply`: Module B output
   (identical to input for this baseline).
-- `resplat/rendered/*.png`: rendered RGB PNGs for all non-context views.
-- `resplat/metrics.json`: mean and per-view PSNR, SSIM, and LPIPS.
-- `resplat/scene_timing.json`: model loading, warm scene processing, and
-  quality-metric evaluation timings.
-- `performance_quality_report.json`: timings, the 30-second score, and the
+- `resplat/rendered/*.png`: native-resolution rendered RGB PNGs.
+- `resplat/metrics.json`: mean/per-view metrics and the resolutions used.
+- `resplat/scene_timing.json`: model loading, warm scene processing,
+  quality-metric evaluation, network input resolution, and native render
+  resolution.
+- `performance_quality_report.json`: timings, resolutions, score, and the
   separate official Module B budget check.
 
 ## Requirements

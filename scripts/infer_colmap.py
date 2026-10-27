@@ -596,6 +596,31 @@ def compute_target_shape(orig_h, orig_w, max_resolution=960, image_shape=None):
     return h, w
 
 
+def get_uniform_native_image_shape(image_paths):
+    """Return native (H, W), rejecting mixed-resolution scenes explicitly."""
+    sizes = set()
+    for path in image_paths:
+        with Image.open(path) as image:
+            sizes.add(image.size)
+    if len(sizes) != 1:
+        raise ValueError(
+            "Native-resolution rendering currently requires all scene images "
+            f"to share one size; found {sorted(sizes)}"
+        )
+    width, height = sizes.pop()
+    return height, width
+
+
+def load_native_images(image_paths):
+    """Load RGB images without resizing, preserving their input resolution."""
+    to_tensor = tf.ToTensor()
+    images = []
+    for path in image_paths:
+        with Image.open(path) as image:
+            images.append(to_tensor(image.convert("RGB")))
+    return torch.stack(images)
+
+
 def load_and_preprocess_images(image_paths, target_h, target_w):
     """Load images and resize to target resolution.
 
@@ -842,6 +867,29 @@ def run_inference(encoder, decoder, batch, num_refine, render_chunk_size=10,
     print(f"Rendered {Vt} views at {h}x{w}")
 
     return gaussians, rendered, rendered_depth, visualization_dump
+
+
+@torch.no_grad()
+def render_at_resolution(decoder, gaussians, batch, image_shape, chunk_size=10):
+    """Render the final Gaussians at a requested pixel resolution."""
+    target = batch["target"]
+    view_count = target["extrinsics"].shape[1]
+    height, width = image_shape
+    colors, depths = [], []
+    for start in range(0, view_count, chunk_size):
+        end = min(start + chunk_size, view_count)
+        output = decoder.forward(
+            gaussians,
+            target["extrinsics"][:, start:end],
+            target["intrinsics"][:, start:end],
+            target["near"][:, start:end],
+            target["far"][:, start:end],
+            (height, width),
+            depth_mode=None,
+        )
+        colors.append(output.color[0])
+        depths.append(output.depth[0])
+    return torch.cat(colors, dim=0), torch.cat(depths, dim=0)
 
 
 # =============================================================================
@@ -1399,17 +1447,19 @@ def run_scene(args, scene_path, scene_name, output_dir,
         print("  Warning: No target views selected. Using all views as targets.")
         target_indices = np.arange(num_total)
 
-    # 4. Load and preprocess images
+    context_image_paths = [scene_data["image_paths"][i] for i in context_indices]
+    target_image_paths = [scene_data["image_paths"][i] for i in target_indices]
+    native_output_shape = get_uniform_native_image_shape(scene_data["image_paths"])
+    STAGE_TIMINGS["input_resolution"] = f"{native_output_shape[0]}x{native_output_shape[1]}"
+    STAGE_TIMINGS["model_input_resolution"] = f"{target_h}x{target_w}"
+
+    # 4. Load and preprocess images at the selected model resolution.
     print(f"\n[4/6] Loading and preprocessing images...")
     context_images = load_and_preprocess_images(
-        [scene_data["image_paths"][i] for i in context_indices],
-        target_h,
-        target_w,
+        context_image_paths, target_h, target_w
     )
     target_images = load_and_preprocess_images(
-        [scene_data["image_paths"][i] for i in target_indices],
-        target_h,
-        target_w,
+        target_image_paths, target_h, target_w
     )
     print(f"  Context images: {context_images.shape}")
     print(f"  Target images: {target_images.shape}")
@@ -1464,10 +1514,26 @@ def run_scene(args, scene_path, scene_name, output_dir,
         save_depth=args.save_depth,
     )
 
+    # ReSplat uses the preset's resized images for its unchanged forward path.
+    # Final renders are generated at the source image resolution for scoring.
+    if native_output_shape != (target_h, target_w):
+        print(
+            f"Rendering final outputs at native input resolution "
+            f"{native_output_shape[0]}x{native_output_shape[1]}..."
+        )
+        rendered, rendered_depth = render_at_resolution(
+            decoder, gaussians, batch, native_output_shape,
+            chunk_size=args.render_chunk_size,
+        )
+    STAGE_TIMINGS["output_resolution"] = (
+        f"{rendered.shape[-2]}x{rendered.shape[-1]}"
+    )
+
     # Save outputs
     print(f"\nSaving outputs to {output_dir}...")
     target_image_names = [scene_data["image_names"][i] for i in target_indices]
     context_image_names = [scene_data["image_names"][i] for i in context_indices]
+    context_images_native = load_native_images(context_image_paths)
 
     save_outputs(
         rendered,
@@ -1479,7 +1545,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
         save_ply=args.save_ply,
         save_depth=args.save_depth,
         context_image_names=context_image_names,
-        context_images=context_images,
+        context_images=context_images_native,
         visualization_dump=visualization_dump,
         rendered_depth=rendered_depth,
         max_save_images=args.max_save_images,
@@ -1503,8 +1569,9 @@ def run_scene(args, scene_path, scene_name, output_dir,
     if not args.no_eval:
         print(f"\nEvaluating metrics on target views...")
         metric_start = time.perf_counter()
+        target_images_native = load_native_images(target_image_paths)
         metrics = compute_metrics(
-            rendered, target_images, target_image_names, output_dir,
+            rendered, target_images_native, target_image_names, output_dir,
             device=args.device,
         )
         # Append config info to metrics file for reproducibility
@@ -1513,7 +1580,8 @@ def run_scene(args, scene_path, scene_name, output_dir,
             "num_context": len(context_indices),
             "num_target": len(target_indices),
             "num_refine": args.num_refine,
-            "resolution": f"{target_h}x{target_w}",
+            "resolution": f"{native_output_shape[0]}x{native_output_shape[1]}",
+            "model_input_resolution": f"{target_h}x{target_w}",
             "model_preset": args.model_preset,
             "checkpoint": args.checkpoint,
         }
@@ -1730,6 +1798,9 @@ def main():
                     "ReSplat inference, rendering, metric computation, and result saving"
                 ),
                 "model_preloaded_before_scene_timer": True,
+                "input_resolution": STAGE_TIMINGS.get("input_resolution"),
+                "model_input_resolution": STAGE_TIMINGS.get("model_input_resolution"),
+                "output_resolution": STAGE_TIMINGS.get("output_resolution"),
             }, f, indent=2)
         print(f"\nScene processing (model already loaded): {scene_processing_seconds:.3f}s")
 
