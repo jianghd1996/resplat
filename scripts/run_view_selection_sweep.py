@@ -145,7 +145,7 @@ def main() -> int:
         report_path = run_dir / "performance_quality_report.json"
         log_path = run_dir / "run.log"
         command = [
-            sys.executable, str(pipeline_script),
+            sys.executable, "-u", str(pipeline_script),
             "--scene", str(scene),
             "--output", str(run_dir),
             "--model-preset", preset,
@@ -176,16 +176,22 @@ def main() -> int:
 
         run_dir.mkdir(parents=True, exist_ok=True)
         with log_path.open("w", encoding="utf-8") as log_file:
-            completed = subprocess.run(
-                command, cwd=repo_root, stdout=log_file,
-                stderr=subprocess.STDOUT, text=True, check=False,
+            process = subprocess.Popen(
+                command, cwd=repo_root, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, bufsize=1,
             )
-        if completed.returncode == 0 and report_path.is_file():
+            assert process.stdout is not None
+            for line in process.stdout:
+                print("  " + line.rstrip(), flush=True)
+                log_file.write(line)
+            process.stdout.close()
+            return_code = process.wait()
+        if return_code == 0 and report_path.is_file():
             row = load_row(report_path, preset, count, strategy, seed, log_path)
             print(f"  PSNR={row['psnr']} SSIM={row['ssim']} "
                   f"LPIPS={row['lpips']} time={row['warm_end_to_end_seconds']}s")
         else:
-            error = f"pipeline exit={completed.returncode}"
+            error = f"pipeline exit={return_code}"
             row = load_row(report_path, preset, count, strategy, seed,
                            log_path, status="failed", error=error)
             print(f"  FAILED ({error}); see {log_path}")

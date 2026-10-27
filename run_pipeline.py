@@ -76,7 +76,7 @@ def main() -> int:
     output.mkdir(parents=True, exist_ok=True)
     inference_dir = output / "resplat"
     cmd = [
-        sys.executable, str(repo_root / "scripts" / "infer_colmap.py"),
+        sys.executable, "-u", str(repo_root / "scripts" / "infer_colmap.py"),
         "--scene_path", str(scene),
         "--output_dir", str(inference_dir),
         "--model_preset", args.model_preset,
