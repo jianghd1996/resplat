@@ -47,19 +47,30 @@ all other parameters fixed across evaluation scenes; do not tune by scene.
 - `performance_quality_report.json`: timing, budget check, component scores,
   and total score when all required inputs are available.
 
-The score maps PSNR 15–40 dB to 0–20 points, SSIM 0.70–0.95 to 0–20,
+The **30-second end-to-end target is a practical engineering target**, not a
+replacement for the official Module B limit. The report checks it separately.
+End-to-end time includes the upstream inference call and Module B output; the
+upstream call includes FPS selection (Module A), ReSplat inference, rendering,
+PNG/PLY export, and metric computation. FPS and forward inference are not
+separately timed because this pipeline leaves the upstream inference path
+untouched.
+
+The official score maps PSNR 15–40 dB to 0–20 points, SSIM 0.70–0.95 to 0–20,
 LPIPS 0.25–0.05 to 0–40, and Module B runtime to 0–20 (full time points at
 10% or less of the 30,000-iteration budget; zero at or above the budget).
 Values outside the metric ranges are clamped at the range endpoints.
 
 ## Timing interpretation
 
-The report measures ReSplat inference separately and counts only the Module B
-adapter against the 30,000-iteration allowance. For the baseline this is
-copy-and-verify time. A future optimization must replace the adapter while
-preserving its interface and must be evaluated with the same scene-independent
-parameters. The time check uses the strict condition `module_b_seconds <
-30000 * t_iter_sec`.
+The report records the upstream Module A + ReSplat pipeline, Module B, and
+end-to-end wall times. The upstream pipeline time includes inference setup,
+FPS selection, ReSplat inference, rendering, metric computation, and output
+saving. Only Module B is checked against the official 30,000-iteration
+allowance. For this baseline Module B is PLY copy-and-verify time. A future
+optimization must replace the adapter while preserving its interface and use
+the same scene-independent parameters. The official check uses the strict
+condition `module_b_seconds < 30000 * t_iter_sec`; the separate practical
+target is `end_to_end_seconds <= 30`.
 
 ## Requirements
 

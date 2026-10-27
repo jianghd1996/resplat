@@ -34,8 +34,8 @@ def score_time_efficiency(module_b_seconds: float, budget_seconds: float) -> flo
 
 
 def build_report(*, scene, output, preset, checkpoint, module_b,
-                 inference_seconds, module_b_seconds, t_iter_sec, metrics,
-                 rendered_png_dir, ply_path):
+                 inference_seconds, module_b_seconds, end_to_end_seconds,
+                 t_iter_sec, metrics, rendered_png_dir, ply_path):
     scores = {"psnr": None, "ssim": None, "lpips": None, "time_efficiency": None}
     metric_values = None
     if metrics and all(k in metrics for k in ("psnr", "ssim", "lpips")):
@@ -69,8 +69,20 @@ def build_report(*, scene, output, preset, checkpoint, module_b,
         },
         "module_b": module_b,
         "timing": {
-            "resplat_inference_seconds": round(float(inference_seconds), 6),
+            "module_a_and_resplat_pipeline_seconds": round(float(inference_seconds), 6),
+            "module_a_and_resplat_scope": (
+                "Upstream infer_colmap.py wall time: FPS view selection, image/model "
+                "preparation, ReSplat inference, rendering, PNG/PLY export, and metrics."
+            ),
+            "module_a_seconds_separately_measured": False,
             "module_b_seconds": round(float(module_b_seconds), 6),
+            "end_to_end_seconds": round(float(end_to_end_seconds), 6),
+        },
+        "practical_runtime_target": {
+            "target_seconds": 30.0,
+            "measured_end_to_end_seconds": round(float(end_to_end_seconds), 6),
+            "status": "pass" if end_to_end_seconds <= 30.0 else "over_target",
+            "is_official_competition_time_limit": False,
         },
         "time_budget": {
             "classic_3dgs_seconds_per_iteration": t_iter_sec,

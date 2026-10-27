@@ -94,11 +94,13 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    # This is the unchanged upstream inference entry point. Its wall time is
-    # recorded separately and is not counted against the Module B allowance.
-    inference_start = time.perf_counter()
+    # This is the unchanged upstream inference entry point. The upstream
+    # script includes Module A's FPS view selection plus ReSplat inference,
+    # rendering, export, and metric computation; these remain one measured
+    # stage because the upstream path is treated as a black box.
+    pipeline_start = time.perf_counter()
     subprocess.run(cmd, cwd=repo_root, check=True)
-    inference_seconds = time.perf_counter() - inference_start
+    inference_seconds = time.perf_counter() - pipeline_start
 
     source_ply = inference_dir / "gaussians.ply"
     if not source_ply.is_file():
@@ -117,6 +119,7 @@ def main() -> int:
     refined_ply = output / "gaussians_refined.ply"
     shutil.copy2(module_b_ply, refined_ply)
     module_b_seconds = time.perf_counter() - module_b_start
+    end_to_end_seconds = time.perf_counter() - pipeline_start
 
     metrics_path = inference_dir / "metrics.json"
     metrics = None
@@ -132,6 +135,7 @@ def main() -> int:
         module_b=module_b_metadata,
         inference_seconds=inference_seconds,
         module_b_seconds=module_b_seconds,
+        end_to_end_seconds=end_to_end_seconds,
         t_iter_sec=args.t_iter_sec,
         metrics=metrics,
         rendered_png_dir=str(inference_dir / "rendered"),
@@ -145,7 +149,9 @@ def main() -> int:
     print(f"  PLY: {refined_ply}")
     print(f"  PNG renders: {inference_dir / 'rendered'}")
     print(f"  Report: {report_path}")
-    print(f"  Module B: {module_b_seconds:.6f}s")
+    print(f"  Module A + ReSplat pipeline: {inference_seconds:.3f}s")
+    print(f"  End-to-end (A + ReSplat + B): {end_to_end_seconds:.3f}s")
+    print(f"  30s practical target: {report['practical_runtime_target']['status']}")
     if report["score"]["total"] is None:
         print("  Competition score: partial (supply --t-iter-sec to score time efficiency)")
     else:
