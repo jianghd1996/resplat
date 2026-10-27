@@ -1274,9 +1274,9 @@ def parse_args():
     parser.add_argument(
         "--target_selection",
         type=str,
-        default="remaining",
+        default="all",
         choices=["remaining", "all"],
-        help="Strategy for selecting target views",
+        help="Views to render and evaluate: all selected scene views (including context) or only non-context views",
     )
 
     # Resolution
@@ -1441,7 +1441,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
         num_total, context_indices, args.target_selection, args.num_target
     )
     print(f"  Context: {len(context_indices)} views (strategy: {args.context_selection})")
-    print(f"  Target: {len(target_indices)} views (strategy: {args.target_selection})")
+    print(f"  Evaluation/render views: {len(target_indices)} (selection: {args.target_selection}; includes context: {bool(np.intersect1d(target_indices, context_indices).size)})")
 
     if len(target_indices) == 0:
         print("  Warning: No target views selected. Using all views as targets.")
@@ -1577,8 +1577,14 @@ def run_scene(args, scene_path, scene_name, output_dir,
         # Append config info to metrics file for reproducibility
         metrics["config"] = {
             "context_selection": args.context_selection,
+            "target_selection": args.target_selection,
             "num_context": len(context_indices),
             "num_target": len(target_indices),
+            "context_image_names": context_image_names,
+            "evaluation_image_names": target_image_names,
+            "evaluation_includes_context_views": bool(
+                np.intersect1d(target_indices, context_indices).size
+            ),
             "num_refine": args.num_refine,
             "resolution": f"{native_output_shape[0]}x{native_output_shape[1]}",
             "model_input_resolution": f"{target_h}x{target_w}",

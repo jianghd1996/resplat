@@ -140,9 +140,12 @@ def main() -> int:
 
     metrics_path = inference_dir / "metrics.json"
     metrics = None
+    metrics_config = {}
     if metrics_path.is_file():
         with metrics_path.open(encoding="utf-8") as f:
-            metrics = json.load(f).get("mean")
+            metrics_data = json.load(f)
+        metrics = metrics_data.get("mean")
+        metrics_config = metrics_data.get("config", {})
 
     report = build_report(
         scene=str(scene),
@@ -170,6 +173,17 @@ def main() -> int:
     report["quality"]["rendered_resolution"] = stage_timing.get("output_resolution")
     report["quality"]["metric_resolution"] = stage_timing.get("input_resolution")
     report["quality"]["metrics_compare_against_original_input_images"] = True
+    report["quality"]["target_selection"] = metrics_config.get("target_selection", "all")
+    report["quality"]["evaluation_view_count"] = metrics_config.get("num_target")
+    report["quality"]["evaluation_includes_context_views"] = metrics_config.get(
+        "evaluation_includes_context_views", True
+    )
+    report["quality"]["evaluation_image_names"] = metrics_config.get(
+        "evaluation_image_names", []
+    )
+    report["quality"]["context_image_names"] = metrics_config.get(
+        "context_image_names", []
+    )
 
     report_path = output / "performance_quality_report.json"
     with report_path.open("w", encoding="utf-8") as f:
