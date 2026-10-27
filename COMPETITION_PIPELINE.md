@@ -28,30 +28,30 @@ the matching preset:
 - `dl3dv_32v_256x448`
 - `dl3dv_8v_256x448_large`
 
-For example: `--model-preset dl3dv_16v_256x448`. Keep the chosen preset and
-all other parameters fixed across evaluation scenes; do not tune by scene.
+Keep the chosen preset and all other parameters fixed across evaluation scenes.
 
-## Timing definitions
+## Timing and score definitions
 
 The model is loaded before the warm scene timer starts. The timer then covers
 COLMAP/data loading, Module A view selection and preprocessing, ReSplat
 inference, rendering, and saving the PLY/PNG outputs. PSNR/SSIM/LPIPS are
 offline evaluation metrics; their compute time is recorded separately and is
-excluded from the 30-second practical target. The report also preserves the
-cold subprocess wall time, which includes model load.
+excluded from the project's practical time score. Module B runtime is included
+in the end-to-end time.
 
-Module A selection and ReSplat run inside the existing upstream inference
-entry point, so their times are not separated; the report labels them as a
-combined stage. No ReSplat forward-path instrumentation or computation changes
-are made.
+For the project score, the time component is calculated from total warm
+end-to-end time against a fixed 30-second budget. It follows the stated linear
+rule: full time points at 10% of budget or less (3 seconds), zero at or above
+30 seconds, with linear interpolation in between. This project score basis
+reflects the user's chosen practical target.
 
-The **30-second end-to-end target is a practical engineering target**, not a
-replacement for the official Module B limit. The official score maps PSNR
-15–40 dB to 0–20 points, SSIM 0.70–0.95 to 0–20, LPIPS 0.25–0.05 to 0–40,
-and Module B runtime to 0–20 (full time points at 10% or less of the
-30,000-iteration budget; zero at or above the budget). Values outside metric
-ranges are clamped. Pass `--t-iter-sec` with measured classic 3DGS seconds per
-iteration to calculate the official time component and total score.
+The original official Module B constraint is also reported independently:
+`Module B < 30000 * T_iter`. Pass `--t-iter-sec` to check it. This parameter
+is no longer required to calculate the 30-second total-time score.
+
+Module A selection and ReSplat run inside the existing inference entry point,
+so their times are not separated; the report labels them as a combined stage.
+No ReSplat forward computation is changed.
 
 ## Outputs
 
@@ -62,11 +62,8 @@ iteration to calculate the official time component and total score.
 - `resplat/metrics.json`: mean and per-view PSNR, SSIM, and LPIPS.
 - `resplat/scene_timing.json`: model loading, warm scene processing, and
   quality-metric evaluation timings.
-- `performance_quality_report.json`: timings, budget checks, and scores.
-
-The official Module B check is the strict condition
-`module_b_seconds < 30000 * t_iter_sec`. The separate practical target is
-`warm_end_to_end_seconds <= 30`.
+- `performance_quality_report.json`: timings, the 30-second score, and the
+  separate official Module B budget check.
 
 ## Requirements
 

@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
                         help="COLMAP model directory relative to --scene.")
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--t-iter-sec", type=float, default=None,
-                        help="Measured classic 3DGS seconds/iteration on this machine.")
+                        help="Optional classic 3DGS seconds/iteration for the separate official Module B hard-limit check.")
     parser.add_argument("--module-b", choices=("identity",), default="identity",
                         help="Module B implementation. identity is the reproducible baseline.")
     parser.add_argument("--dry-run", action="store_true",
@@ -181,10 +181,12 @@ def main() -> int:
     print(f"  Cold subprocess wall time: {inference_process_wall_seconds:.3f}s")
     print(f"  30s practical target: {report['practical_runtime_target']['status']}")
     if report["score"]["total"] is None:
-        print("  Competition score: partial (supply --t-iter-sec to score time efficiency)")
+        print("  Competition score: quality metrics are unavailable")
     else:
-        print(f"  Competition score: {report['score']['total']:.2f}/100")
-        print(f"  Module B budget status: {report['time_budget']['status']}")
+        print(f"  Competition score (30s total-time basis): {report['score']['total']:.2f}/100")
+    print(f"  30s total-time score: {report['time_budget']['score_status']}")
+    print(f"  Official Module B hard-limit check: "
+          f"{report['time_budget']['official_module_b_constraint']['status']}")
     return 0
 
 
