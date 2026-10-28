@@ -46,16 +46,31 @@ def main() -> int:
     module_b_dir = pipeline_output / "module_b"
     initial_ply = inference_dir / "gaussians_model_frame.ply"
     frame_path = inference_dir / "reconstruction_frame.json"
+    metrics_path = inference_dir / "metrics.json"
     output_ply = (
         args.output_ply.expanduser().resolve()
         if args.output_ply else module_b_dir / "gaussians.ply"
     )
 
-    for path in (scene, initial_ply, frame_path):
+    for path in (scene, initial_ply, frame_path, metrics_path):
         if not path.exists():
             raise FileNotFoundError(path)
     with frame_path.open(encoding="utf-8") as f:
         frame_info = json.load(f)
+    with metrics_path.open(encoding="utf-8") as f:
+        metrics_info = json.load(f)
+    selected_image_names = metrics_info.get("config", {}).get(
+        "evaluation_image_names", []
+    )
+    if not selected_image_names:
+        raise ValueError(
+            f"{metrics_path} has no config.evaluation_image_names"
+        )
+    if len(selected_image_names) != args.max_frames:
+        raise ValueError(
+            f"Fixed evaluation set has {len(selected_image_names)} views, but "
+            f"--max-frames is {args.max_frames}."
+        )
 
     stage_start = time.perf_counter()
     result_ply, metadata = run_reconstruction_full(
@@ -71,6 +86,7 @@ def main() -> int:
         mode=args.mode,
         circle=args.circle,
         max_frames=args.max_frames,
+        selected_image_names=selected_image_names,
     )
     metadata["stage_wall_seconds"] = round(time.perf_counter() - stage_start, 6)
     metadata["coordinate_frame"] = frame_info.get("coordinate_frame")
