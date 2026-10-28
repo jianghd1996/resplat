@@ -215,6 +215,7 @@ def main() -> int:
         }
 
     baseline_report_path = pipeline_output / "performance_quality_report.json"
+    scene_timing_path = pipeline_output / "resplat" / "scene_timing.json"
     optimizer_report_path = pipeline_output / "module_b" / "reconstruction_full_report.json"
     baseline_warm_seconds = None
     resplat_output_seconds = None
@@ -224,6 +225,17 @@ def main() -> int:
         timing = baseline_report.get("timing", {})
         baseline_warm_seconds = timing.get("warm_end_to_end_seconds")
         resplat_output_seconds = timing.get("data_to_saved_model_outputs_seconds")
+    elif scene_timing_path.is_file():
+        # A previous one-process Reconstruction_full run may have failed after
+        # ReSplat inference but before run_pipeline.py wrote its final report.
+        with scene_timing_path.open(encoding="utf-8") as f:
+            scene_timing = json.load(f)
+        resplat_output_seconds = max(
+            0.0,
+            float(scene_timing["scene_processing_seconds"])
+            - float(scene_timing.get("quality_metric_evaluation_seconds", 0.0)),
+        )
+        baseline_warm_seconds = resplat_output_seconds
     optimizer_seconds = None
     if optimizer_report_path.is_file():
         with optimizer_report_path.open(encoding="utf-8") as f:
