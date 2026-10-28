@@ -236,7 +236,10 @@ def main() -> int:
 
     baseline_report_path = pipeline_output / "performance_quality_report.json"
     scene_timing_path = pipeline_output / "resplat" / "scene_timing.json"
-    optimizer_report_path = pipeline_output / "module_b" / "reconstruction_full_report.json"
+    optimizer_report_paths = [
+        pipeline_output / "module_b" / "direct_refinement_report.json",
+        pipeline_output / "module_b" / "reconstruction_full_report.json",
+    ]
     baseline_warm_seconds = None
     resplat_output_seconds = None
     if baseline_report_path.is_file():
@@ -257,10 +260,18 @@ def main() -> int:
         )
         baseline_warm_seconds = resplat_output_seconds
     optimizer_seconds = None
-    if optimizer_report_path.is_file():
-        with optimizer_report_path.open(encoding="utf-8") as f:
-            optimizer_report = json.load(f)
-        optimizer_seconds = optimizer_report.get("stage_wall_seconds")
+    optimizer_report_path = None
+    optimizer_report = None
+    for candidate in optimizer_report_paths:
+        if candidate.is_file():
+            optimizer_report_path = candidate
+            with candidate.open(encoding="utf-8") as f:
+                optimizer_report = json.load(f)
+            if candidate.name == "direct_refinement_report.json":
+                optimizer_seconds = optimizer_report.get("optimization_seconds")
+            else:
+                optimizer_seconds = optimizer_report.get("stage_wall_seconds")
+            break
 
     add_full_score(results["resplat"], baseline_warm_seconds)
     optimized_warm_seconds = None
@@ -277,6 +288,10 @@ def main() -> int:
         "resolution": f"{height}x{width}",
         "same_views_and_native_resolution": True,
         "coordinate_frame": frame_info.get("coordinate_frame"),
+        "optimizer_report": (
+            str(optimizer_report_path) if optimizer_report_path is not None else None
+        ),
+        "optimizer_seconds": optimizer_seconds,
         "ply_sha256": {
             "resplat": baseline_sha256,
             "optimized": optimized_sha256,
