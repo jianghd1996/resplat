@@ -194,6 +194,16 @@ def main() -> int:
             )
         with frame_path.open(encoding="utf-8") as f:
             frame_info = json.load(f)
+        reconstruction_metrics_path = inference_dir / "metrics.json"
+        with reconstruction_metrics_path.open(encoding="utf-8") as f:
+            reconstruction_metrics = json.load(f)
+        selected_image_names = reconstruction_metrics.get("config", {}).get(
+            "evaluation_image_names", []
+        )
+        if not selected_image_names:
+            raise ValueError(
+                "ReSplat metrics do not contain evaluation_image_names."
+            )
         module_b_ply, module_b_metadata = run_reconstruction_full(
             initial_ply=init_ply,
             scene_path=scene,
@@ -207,6 +217,7 @@ def main() -> int:
             mode=args.reconstruction_mode,
             circle=args.reconstruction_circle,
             max_frames=args.reconstruction_max_frames,
+            selected_image_names=selected_image_names,
         )
     if args.module_b == "none":
         refined_ply = source_ply
