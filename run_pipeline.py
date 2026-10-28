@@ -37,6 +37,8 @@ def parse_args() -> argparse.Namespace:
                         help="Optional context-view override. Keep fixed across scenes.")
     parser.add_argument("--num-refine", type=int, default=None,
                         help="Optional ReSplat preset refinement override.")
+    parser.add_argument("--max-resolution", type=int, default=None,
+                        help="Optional maximum model input resolution override (long side).")
     parser.add_argument("--context-selection", choices=("fps", "uniform", "random"),
                         default="fps",
                         help="Context view selection strategy.")
@@ -95,6 +97,8 @@ def main() -> int:
         cmd.extend(["--num_context", str(args.num_context)])
     if args.num_refine is not None:
         cmd.extend(["--num_refine", str(args.num_refine)])
+    if args.max_resolution is not None:
+        cmd.extend(["--max_resolution", str(args.max_resolution)])
 
     print("ReSplat inference command:")
     print(" ".join(subprocess.list2cmdline([part]) for part in cmd))
