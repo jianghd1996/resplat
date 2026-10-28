@@ -275,4 +275,3 @@ def run_reconstruction_full(
         "returned_result_keys": list(result.keys()) if isinstance(result, dict) else None,
         "output_matches_initial_ply": initial_ply.read_bytes() == output_ply.read_bytes(),
     }
-}
