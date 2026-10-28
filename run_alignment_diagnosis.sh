@@ -13,13 +13,8 @@ COMMAND=(
   --scene "$SCENE"
   --pipeline-output "$RUN_DIR"
 )
-if [[ -n "${COLMAP_FINAL:-}" \
-      && -f "$COLMAP_FINAL/cameras.txt" \
-      && -f "$COLMAP_FINAL/images.txt" ]]; then
-  COMMAND+=(--colmap-final "$COLMAP_FINAL")
-elif [[ -n "${COLMAP_FINAL:-}" ]]; then
-  echo "Ignoring stale COLMAP_FINAL: $COLMAP_FINAL" >&2
-  echo "Auto-selecting the latest complete result_gs/*/colmap_final." >&2
+if [[ -n "${COLMAP_FINAL_OVERRIDE:-}" ]]; then
+  COMMAND+=(--colmap-final "$COLMAP_FINAL_OVERRIDE")
 fi
 
 "${COMMAND[@]}"
