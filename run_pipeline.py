@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
                         help="Optional classic 3DGS seconds/iteration for the separate official Module B hard-limit check.")
     parser.add_argument("--module-b", choices=("identity", "reconstruction_full"), default="identity",
                         help="Module B implementation: identity or optional Reconstruction_full.")
+    parser.add_argument(
+        "--export-reconstruction-init", action="store_true",
+        help=("Export gaussians_model_frame.ply and reconstruction_frame.json "
+              "for running Reconstruction_full later in another environment."),
+    )
     parser.add_argument("--reconstruction-code-root", type=Path, default=None,
                         help="Parent directory containing Reconstruction_full; defaults to the repo root.")
     parser.add_argument("--reconstruction-mode", default="scene",
@@ -107,7 +112,7 @@ def main() -> int:
         "--context_selection", args.context_selection,
         "--seed", str(args.seed),
     ]
-    if args.module_b == "reconstruction_full":
+    if args.module_b == "reconstruction_full" or args.export_reconstruction_init:
         cmd.append("--save_reconstruction_init")
     if args.checkpoint:
         cmd.extend(["--checkpoint", str(args.checkpoint.expanduser().resolve())])
@@ -260,6 +265,9 @@ def main() -> int:
 
     print(f"\nPipeline complete: {output}")
     print(f"  PLY: {refined_ply}")
+    if args.export_reconstruction_init:
+        print(f"  Reconstruction_full init PLY: {inference_dir / 'gaussians_model_frame.ply'}")
+        print(f"  Reconstruction frame: {inference_dir / 'reconstruction_frame.json'}")
     if args.module_b == "reconstruction_full":
         print("  Metrics in this report are the ReSplat pre-optimization baseline.")
     print(f"  PNG renders: {inference_dir / 'rendered'}")
@@ -285,3 +293,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
