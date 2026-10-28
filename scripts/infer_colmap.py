@@ -1557,6 +1557,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
     )
 
     if args.save_reconstruction_init:
+        os.makedirs(output_dir, exist_ok=True)
         reference_index = context_indices[len(context_indices) // 2]
         frame_info = {
             "coordinate_frame": "middle_context_camera",
