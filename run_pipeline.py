@@ -51,8 +51,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--t-iter-sec", type=float, default=None,
                         help="Optional classic 3DGS seconds/iteration for the separate official Module B hard-limit check.")
-    parser.add_argument("--module-b", choices=("identity", "reconstruction_full"), default="identity",
-                        help="Module B implementation: identity or optional Reconstruction_full.")
+    parser.add_argument(
+        "--module-b", choices=("none", "identity", "reconstruction_full"),
+        default="identity",
+        help=(
+            "Module B implementation. Use none to export ReSplat and optional "
+            "Reconstruction_full inputs without touching module_b/."
+        ),
+    )
     parser.add_argument(
         "--export-reconstruction-init", action="store_true",
         help=("Export gaussians_model_frame.ply and reconstruction_frame.json "
@@ -160,14 +166,23 @@ def main() -> int:
 
     module_b_start = time.perf_counter()
     module_b_dir = output / "module_b"
-    module_b_dir.mkdir(parents=True, exist_ok=True)
-    if args.module_b == "identity":
+    if args.module_b == "none":
+        module_b_ply = source_ply
+        module_b_metadata = {
+            "name": "none",
+            "is_quality_optimization": False,
+            "input_ply": str(source_ply),
+            "output_ply": None,
+        }
+    elif args.module_b == "identity":
+        module_b_dir.mkdir(parents=True, exist_ok=True)
         module_b_ply, module_b_metadata = run_module_b(
             source_ply=source_ply,
             output_ply=module_b_dir / "gaussians.ply",
             method="identity",
         )
     else:
+        module_b_dir.mkdir(parents=True, exist_ok=True)
         from src.competition.reconstruction_full_adapter import run_reconstruction_full
 
         init_ply = inference_dir / "gaussians_model_frame.ply"
@@ -193,8 +208,11 @@ def main() -> int:
             circle=args.reconstruction_circle,
             max_frames=args.reconstruction_max_frames,
         )
-    refined_ply = output / "gaussians_refined.ply"
-    shutil.copy2(module_b_ply, refined_ply)
+    if args.module_b == "none":
+        refined_ply = source_ply
+    else:
+        refined_ply = output / "gaussians_refined.ply"
+        shutil.copy2(module_b_ply, refined_ply)
     module_b_seconds = time.perf_counter() - module_b_start
     end_to_end_seconds = output_generation_seconds + module_b_seconds
     evaluation_end_to_end_seconds = scene_processing_seconds + module_b_seconds
@@ -235,7 +253,7 @@ def main() -> int:
     report["quality"]["metric_resolution"] = stage_timing.get("input_resolution")
     report["quality"]["metrics_compare_against_original_input_images"] = True
     report["quality"]["metrics_source_ply"] = str(source_ply)
-    report["quality"]["metrics_are_post_module_b"] = args.module_b == "identity"
+    report["quality"]["metrics_are_post_module_b"] = args.module_b in ("none", "identity")
     if args.module_b == "reconstruction_full":
         report["score"]["is_provisional_pre_module_b_quality"] = True
         report["score"]["note"] = (
