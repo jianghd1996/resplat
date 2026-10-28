@@ -135,7 +135,7 @@ def build_report(*, scene, output, preset, checkpoint, module_b,
             },
         },
         "quality": {
-            "evaluation_split": "all selected COLMAP views, including context views",
+            "evaluation_split": "fixed evaluation views recorded in resplat/metrics.json",
             "metrics": metric_values,
             "rendered_png_dir": rendered_png_dir,
             "refined_ply": ply_path,
