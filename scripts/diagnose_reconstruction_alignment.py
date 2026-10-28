@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -111,6 +112,91 @@ def stats(values):
     }
 
 
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def resolve_image_pairs(
+    scene_data, original_by_name, final_images, final_by_name, pipeline_output
+):
+    exact = sorted(set(original_by_name) & set(final_by_name))
+    if len(exact) >= 3:
+        return [(name, name) for name in exact], "exact_basename"
+
+    metrics_path = pipeline_output / "resplat" / "metrics.json"
+    evaluation_names = []
+    if metrics_path.is_file():
+        with metrics_path.open(encoding="utf-8") as f:
+            metrics = json.load(f)
+        evaluation_names = [
+            Path(name).name
+            for name in metrics.get("config", {}).get(
+                "evaluation_image_names", []
+            )
+        ]
+    if not evaluation_names:
+        evaluation_names = [
+            Path(name).name for name in scene_data["image_names"]
+        ][:len(final_images)]
+
+    original_path_by_name = {
+        Path(name).name: Path(scene_data["image_paths"][index])
+        for index, name in enumerate(scene_data["image_names"])
+    }
+    original_hash_to_name = {}
+    for name in evaluation_names:
+        path = original_path_by_name.get(name)
+        if path is not None and path.is_file():
+            original_hash_to_name[file_sha256(path)] = name
+
+    work_dir = pipeline_output / "module_b" / "reconstruction_work"
+    final_names = set(final_by_name)
+    renamed_paths = {}
+    image_extensions = {
+        ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"
+    }
+    if work_dir.is_dir():
+        for path in work_dir.rglob("*"):
+            if (
+                path.is_file()
+                and path.suffix.lower() in image_extensions
+                and path.name in final_names
+            ):
+                renamed_paths.setdefault(path.name, []).append(path)
+
+    hash_pairs = []
+    used_originals = set()
+    for final_name, paths in renamed_paths.items():
+        for path in paths:
+            original_name = original_hash_to_name.get(file_sha256(path))
+            if original_name is not None and original_name not in used_originals:
+                hash_pairs.append((original_name, final_name))
+                used_originals.add(original_name)
+                break
+    if len(hash_pairs) >= 3:
+        return sorted(hash_pairs), "sha256_image_content"
+
+    final_order = [
+        Path(image.name).name
+        for image in sorted(final_images.values(), key=lambda image: image.id)
+    ]
+    evaluation_names = [
+        name for name in evaluation_names if name in original_by_name
+    ]
+    if len(final_order) == len(evaluation_names) and len(final_order) >= 3:
+        return list(zip(evaluation_names, final_order)), "recorded_order_fallback"
+
+    raise ValueError(
+        "Could not map Reconstruction image names to original images. "
+        f"Exact matches={len(exact)}, content-hash matches={len(hash_pairs)}, "
+        f"final images={len(final_order)}, evaluation images={len(evaluation_names)}."
+    )
+
+
 def main() -> int:
     args = parse_args()
     scene = args.scene.expanduser().resolve()
@@ -150,18 +236,17 @@ def main() -> int:
     final_by_name = {
         Path(image.name).name: image for image in final_images.values()
     }
-    names = sorted(set(original_by_name) & set(final_by_name))
-    if len(names) < 3:
-        raise ValueError(
-            f"Need at least 3 matching image names, found {len(names)}"
-        )
+    image_pairs, mapping_method = resolve_image_pairs(
+        scene_data, original_by_name, final_images, final_by_name,
+        pipeline_output,
+    )
 
     expected_poses = []
     final_poses = []
-    for name in names:
-        original_c2w, _ = original_by_name[name]
+    for original_name, final_name in image_pairs:
+        original_c2w, _ = original_by_name[original_name]
         expected_poses.append(world_to_model @ original_c2w)
-        final_poses.append(image_c2w(final_by_name[name]))
+        final_poses.append(image_c2w(final_by_name[final_name]))
     expected_poses = np.stack(expected_poses)
     final_poses = np.stack(final_poses)
 
@@ -200,9 +285,9 @@ def main() -> int:
 
     intrinsic_relative_errors = []
     unsupported_camera_models = set()
-    for name in names:
-        _, original_k = original_by_name[name]
-        final_image = final_by_name[name]
+    for original_name, final_name in image_pairs:
+        _, original_k = original_by_name[original_name]
+        final_image = final_by_name[final_name]
         final_camera = final_cameras[final_image.camera_id]
         final_k = normalized_intrinsics(final_camera)
         if final_k is None:
@@ -237,8 +322,12 @@ def main() -> int:
         "schema_version": 1,
         "scene": str(scene),
         "colmap_final": str(colmap_final),
-        "matched_image_count": len(names),
-        "matched_image_names": names,
+        "matched_image_count": len(image_pairs),
+        "image_mapping_method": mapping_method,
+        "image_name_pairs": [
+            {"original": original_name, "reconstruction": final_name}
+            for original_name, final_name in image_pairs
+        ],
         "mapping": "resplat_model_point = scale * rotation @ reconstruction_point + translation",
         "reconstruction_to_resplat_similarity": {
             "scale": scale,
@@ -272,7 +361,8 @@ def main() -> int:
 
     print("\nReconstruction/ReSplat alignment diagnosis")
     print(f"  COLMAP final: {colmap_final}")
-    print(f"  Matched cameras: {len(names)}")
+    print(f"  Matched cameras: {len(image_pairs)}")
+    print(f"  Image mapping: {mapping_method}")
     print(f"  Sim(3) scale: {scale:.9f}")
     print(
         "  Direct center RMSE: "
