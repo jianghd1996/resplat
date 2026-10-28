@@ -32,22 +32,50 @@ def export_ply(
     harmonics: Float[Tensor, "gaussian 3 d_sh"],
     opacities: Float[Tensor, " gaussian"],
     path: Path,
+    covariances: Float[Tensor, "gaussian 3 3"] | None = None,
     align_to_view: bool = True,  # whether to align world space to the view space (camera space) of the extrinsics
     save_gaussian_npz: bool = False,
 ):
+    view_rotation = None
     if align_to_view:
         view_rotation = extrinsics[:3, :3].inverse()
         # Apply the rotation to the means (Gaussian positions).
         means = einsum(view_rotation, means, "i j, ... j -> ... i")
 
-        # Apply the rotation to the Gaussian rotations.
-        rotations = R.from_quat(rotations.detach().cpu().numpy()).as_matrix()
-        rotations = view_rotation.detach().cpu().numpy() @ rotations
-        rotations = R.from_matrix(rotations).as_quat()
-        x, y, z, w = rearrange(rotations, "g xyzw -> xyzw g")
-        rotations = np.stack((w, x, y, z), axis=-1)
+    if covariances is not None:
+        # Covariances already contain each Gaussian's source-view-to-world
+        # rotation. Decomposing them makes the PLY reproduce the ellipsoids
+        # rendered by the live decoder.
+        covariances = 0.5 * (
+            covariances + covariances.transpose(-1, -2)
+        )
+        if view_rotation is not None:
+            covariances = (
+                view_rotation[None]
+                @ covariances
+                @ view_rotation.transpose(-1, -2)[None]
+            )
+        eigenvalues, rotation_matrices = torch.linalg.eigh(covariances)
+        scales = eigenvalues.clamp_min(1e-16).sqrt()
+        rotation_matrices = rotation_matrices.clone()
+        negative_det = torch.linalg.det(rotation_matrices) < 0
+        rotation_matrices[negative_det, :, 0] *= -1
+        rotations_xyzw = R.from_matrix(
+            rotation_matrices.detach().cpu().numpy()
+        ).as_quat()
     else:
-        rotations = rotations.detach().cpu().numpy()
+        rotation_matrices = R.from_quat(
+            rotations.detach().cpu().numpy()
+        ).as_matrix()
+        if view_rotation is not None:
+            rotation_matrices = (
+                view_rotation.detach().cpu().numpy() @ rotation_matrices
+            )
+        rotations_xyzw = R.from_matrix(rotation_matrices).as_quat()
+
+    # Standard 3DGS PLY quaternion property order is wxyz.
+    x, y, z, w = rearrange(rotations_xyzw, "g xyzw -> xyzw g")
+    rotations = np.stack((w, x, y, z), axis=-1)
 
     num_rest = 3 * (harmonics.shape[-1] - 1)
 
@@ -126,6 +154,7 @@ def save_gaussian_ply(gaussians, visualization_dump, example, save_path,
             gaussians.harmonics[0],
             gaussians.opacities[0],
             save_path,
+            covariances=gaussians.covariances[0],
             align_to_view=not no_align_to_view,
             save_gaussian_npz=save_gaussian_npz,
         )
@@ -141,8 +170,10 @@ def save_gaussian_ply(gaussians, visualization_dump, example, save_path,
             trim(gaussians.harmonics)[0],
             trim(gaussians.opacities)[0],
             save_path,
+            covariances=trim(gaussians.covariances)[0],
             align_to_view=not no_align_to_view,
             save_gaussian_npz=save_gaussian_npz,
         )
+
 
 
