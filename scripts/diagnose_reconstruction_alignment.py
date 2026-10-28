@@ -132,6 +132,35 @@ def image_fingerprint(path: Path) -> np.ndarray:
     return (feature - feature.mean()) / max(float(feature.std()), 1e-6)
 
 
+def manifest_source_names(data):
+    if isinstance(data, list):
+        names = []
+        for entry in data:
+            if isinstance(entry, str):
+                names.append(Path(entry).name)
+            elif isinstance(entry, dict):
+                value = next(
+                    (entry.get(key) for key in ("path", "name", "image", "file")
+                     if entry.get(key)),
+                    None,
+                )
+                if value is None:
+                    return []
+                names.append(Path(value).name)
+            else:
+                return []
+        return names
+    if isinstance(data, dict):
+        for key in (
+            "source_images", "images", "inputs", "sources", "manifest"
+        ):
+            if key in data:
+                names = manifest_source_names(data[key])
+                if names:
+                    return names
+    return []
+
+
 def resolve_image_pairs(
     scene_data, original_by_name, final_images, final_by_name, pipeline_output
 ):
@@ -203,12 +232,48 @@ def resolve_image_pairs(
         )
 
     final_order = [
-        Path(image.name).name
-        for image in sorted(final_images.values(), key=lambda image: image.id)
+        Path(image.name).name for image in final_images.values()
     ]
     evaluation_names = [
         name for name in evaluation_names if name in original_by_name
     ]
+    # VideoX-Fun records source order before normalizing names to
+    # 000000.jpg, 000001.jpg, ... . Its own pose comparison uses this
+    # manifest and explicitly avoids image_id/order matching.
+    manifest_files = []
+    if work_dir.is_dir():
+        manifest_files.extend(work_dir.rglob("source_images_manifest.json"))
+        manifest_files.extend(work_dir.rglob("multi_input_manifest.json"))
+    for manifest_path in dict.fromkeys(manifest_files):
+        try:
+            source_names = manifest_source_names(
+                json.loads(manifest_path.read_text(encoding="utf-8"))
+            )
+        except (OSError, ValueError, TypeError):
+            continue
+        source_names = [name for name in source_names if name in original_by_name]
+        numeric_pairs = []
+        for final_name in final_order:
+            try:
+                source_index = int(Path(final_name).stem)
+            except ValueError:
+                numeric_pairs = []
+                break
+            if source_index >= len(source_names):
+                numeric_pairs = []
+                break
+            numeric_pairs.append((source_names[source_index], final_name))
+        if len(numeric_pairs) >= 3:
+            return (
+                numeric_pairs,
+                "source_manifest_index",
+                {
+                    "manifest": str(manifest_path),
+                    "manifest_source_count": len(source_names),
+                    "matched_count": len(numeric_pairs),
+                },
+            )
+
     # Reconstruction may resize or re-encode copied images. Select the folder
     # with the best coverage of final COLMAP names, then solve a global
     # one-to-one visual assignment against the fixed evaluation images.
@@ -257,6 +322,7 @@ def resolve_image_pairs(
             )
 
     if len(final_order) == len(evaluation_names) and len(final_order) >= 3:
+        final_order = sorted(final_order)
         return (
             list(zip(evaluation_names, final_order)),
             "recorded_order_fallback",
