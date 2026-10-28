@@ -10,7 +10,23 @@ import time
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
 from scipy.spatial.transform import Rotation
+
+
+COLMAP_CAMERA_MODELS = {
+    0: ("SIMPLE_PINHOLE", 3),
+    1: ("PINHOLE", 4),
+    2: ("SIMPLE_RADIAL", 4),
+    3: ("RADIAL", 5),
+    4: ("OPENCV", 8),
+    5: ("OPENCV_FISHEYE", 8),
+    6: ("FULL_OPENCV", 12),
+    7: ("FOV", 5),
+    8: ("SIMPLE_RADIAL_FISHEYE", 4),
+    9: ("RADIAL_FISHEYE", 5),
+    10: ("THIN_PRISM_FISHEYE", 12),
+}
 
 
 def _qvec_to_rot(q):
@@ -208,6 +224,121 @@ def _filter_colmap_images(sparse_dir, selected_names):
     return count
 
 
+def _scaled_camera(model, width, height, params, new_width, new_height):
+    scale_x = new_width / width
+    scale_y = new_height / height
+    params = np.asarray(params, dtype=np.float64).copy()
+    if model == "SIMPLE_PINHOLE":
+        # Preserve normalized intrinsics exactly when rounding makes x/y
+        # resize factors slightly different.
+        f, cx, cy = params[:3]
+        return (
+            "PINHOLE",
+            np.asarray([
+                f * scale_x, f * scale_y,
+                cx * scale_x, cy * scale_y,
+            ]),
+        )
+    if model == "PINHOLE" or model in {
+        "OPENCV", "OPENCV_FISHEYE", "FULL_OPENCV"
+    }:
+        params[0] *= scale_x
+        params[1] *= scale_y
+        params[2] *= scale_x
+        params[3] *= scale_y
+        return model, params
+    if model in {
+        "SIMPLE_RADIAL", "RADIAL", "FOV",
+        "SIMPLE_RADIAL_FISHEYE", "RADIAL_FISHEYE",
+    }:
+        if not np.isclose(scale_x, scale_y, rtol=1e-3, atol=1e-6):
+            raise ValueError(
+                f"Cannot anisotropically resize COLMAP {model} camera "
+                f"from {width}x{height} to {new_width}x{new_height}"
+            )
+        params[0] *= scale_x
+        params[1] *= scale_x
+        params[2] *= scale_y
+        return model, params
+    raise ValueError(f"Unsupported COLMAP camera model for resize: {model}")
+
+
+def _rescale_cameras_bin(path, new_width, new_height):
+    records = []
+    with path.open("rb") as src:
+        count_bytes = src.read(8)
+        count, = struct.unpack("<Q", count_bytes)
+        for _ in range(count):
+            camera_id, model_id, width, height = struct.unpack(
+                "<iiQQ", src.read(24)
+            )
+            model, num_params = COLMAP_CAMERA_MODELS[model_id]
+            params = struct.unpack(
+                "<" + "d" * num_params, src.read(8 * num_params)
+            )
+            model, params = _scaled_camera(
+                model, width, height, params, new_width, new_height
+            )
+            output_model_id = next(
+                key for key, value in COLMAP_CAMERA_MODELS.items()
+                if value[0] == model
+            )
+            records.append((camera_id, output_model_id, params))
+    with path.open("wb") as dst:
+        dst.write(struct.pack("<Q", len(records)))
+        for camera_id, model_id, params in records:
+            dst.write(struct.pack(
+                "<iiQQ", camera_id, model_id, new_width, new_height
+            ))
+            dst.write(struct.pack("<" + "d" * len(params), *params))
+    return len(records)
+
+
+def _rescale_cameras_txt(path, new_width, new_height):
+    output, count = [], 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            output.append(line)
+            continue
+        fields = line.split()
+        model = fields[1]
+        model, params = _scaled_camera(
+            model, int(fields[2]), int(fields[3]),
+            list(map(float, fields[4:])), new_width, new_height,
+        )
+        output.append(
+            f"{fields[0]} {model} {new_width} {new_height} "
+            + " ".join(f"{value:.17g}" for value in params)
+        )
+        count += 1
+    path.write_text("\n".join(output) + "\n", encoding="utf-8")
+    return count
+
+
+def _rescale_colmap_cameras(sparse_dir, image_paths):
+    sizes = set()
+    for path in image_paths:
+        with Image.open(path) as image:
+            sizes.add(image.size)
+    if len(sizes) != 1:
+        raise ValueError(
+            f"Reconstruction input images have mixed resolutions: {sorted(sizes)}"
+        )
+    new_width, new_height = sizes.pop()
+    cameras_bin = sparse_dir / "cameras.bin"
+    cameras_txt = sparse_dir / "cameras.txt"
+    if cameras_bin.is_file():
+        count = _rescale_cameras_bin(cameras_bin, new_width, new_height)
+    elif cameras_txt.is_file():
+        count = _rescale_cameras_txt(cameras_txt, new_width, new_height)
+    else:
+        raise FileNotFoundError(f"COLMAP cameras.bin/txt missing at {sparse_dir}")
+    return {
+        "camera_count": count,
+        "image_resolution": f"{new_height}x{new_width}",
+    }
+
+
 def _transform_colmap(sparse_dir, reference_c2w):
     reference = np.asarray(reference_c2w, dtype=np.float64)
     if reference.shape != (4, 4):
@@ -305,6 +436,7 @@ def run_reconstruction_full(
     work_dir.mkdir(parents=True, exist_ok=True)
     export_dir.mkdir(parents=True, exist_ok=True)
     image_stage = work_dir / "image"
+    staged_image_paths = []
     if selected_image_names:
         image_stage.mkdir(parents=True, exist_ok=True)
         for name in selected_image_names:
@@ -317,11 +449,18 @@ def run_reconstruction_full(
                 )
             destination = image_stage / Path(name).name
             shutil.copy2(source, destination)
+            staged_image_paths.append(destination)
     else:
         image_stage.symlink_to(image_source, target_is_directory=True)
+        staged_image_paths = sorted(
+            path for path in image_source.iterdir() if path.is_file()
+        )
     sparse_stage = work_dir / "Sparse" / "0"
     sparse_stage.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(sparse_source, sparse_stage)
+    camera_resize_info = _rescale_colmap_cameras(
+        sparse_stage, staged_image_paths
+    )
     _transform_colmap(sparse_stage, reference_c2w_original)
     selected_count = None
     if selected_image_names:
@@ -380,6 +519,7 @@ def run_reconstruction_full(
         "max_frames": max_frames,
         "selected_input_view_count": selected_count,
         "selected_image_names": list(selected_image_names or []),
+        "staged_colmap_camera_resize": camera_resize_info,
         "preload_seconds_included_in_module_b": round(preload_seconds, 6),
         "optimization_seconds": round(optimize_seconds, 6),
         "returned_result_type": type(result).__name__,
