@@ -401,9 +401,13 @@ def main() -> int:
     if not math.isfinite(scene_scale) or scene_scale <= 0:
         scene_scale = 1.0
 
-    appearance_only = args.mode == "appearance_only"
     optimize_geometry = args.mode in {"geometry_lite", "full"}
     optimize_quats = args.mode == "full"
+    if not optimize_geometry:
+        params["means"].requires_grad_(False)
+        params["log_scales"].requires_grad_(False)
+    if not optimize_quats:
+        params["quats"].requires_grad_(False)
 
     param_groups = [
         {"params": [params["sh"]], "lr": args.lr_sh, "name": "sh"},
