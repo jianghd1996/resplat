@@ -21,6 +21,13 @@ cd "$REPO_ROOT"
   --max-frames "$RECONSTRUCTION_MAX_FRAMES"
 
 echo
+echo "Checking whether Reconstruction changed the input cameras..."
+if ! RUN_DIR="$RUN_DIR" PYTHON_BIN="$PYTHON_BIN" \
+  bash "$REPO_ROOT/run_camera_consistency.sh"; then
+  echo "Camera consistency warning reported above; inspect the JSON report."
+fi
+
+echo
 echo "Reconstruction_full complete:"
 echo "  $RUN_DIR/module_b/gaussians.ply"
 echo "  $RUN_DIR/module_b/reconstruction_full_report.json"
