@@ -75,3 +75,38 @@ No ReSplat forward computation is changed.
 Use the environment already set up for ReSplat inference (README installation,
 including PyTorch/CUDA, gsplat, and pointops). The wrapper itself uses only the
 Python standard library and repository modules.
+
+
+## Optional Module B: Reconstruction_full
+
+The original identity adapter remains the default. To run the optional
+`Reconstruction_full` optimizer after ReSplat:
+
+```bash
+python run_pipeline.py \
+  --scene /path/to/colmap_scene \
+  --output results/competition/reconstruction_full \
+  --module-b reconstruction_full \
+  --reconstruction-code-root /path/to/parent/of/Reconstruction_full \
+  --device cuda:0
+```
+
+The adapter imports `Reconstruction_full.Reconstruction`, constructs it with
+`preload=True, dense_init_scene=False`, then calls it with the configured
+`mode`, `circle`, and `max_frames` (defaults: `scene`, `0`, and `60`).
+The code root defaults to the ReSplat repository root.
+
+It creates an isolated workspace under `module_b/reconstruction_work/` with
+an `image/` link and both `Sparse/0/` and `sparse/0/` paths. The copied
+COLMAP camera poses and sparse points are transformed into ReSplat's
+middle-context-camera coordinate frame; the ReSplat Gaussian PLY is supplied
+as `Sparse/0/points3D.ply`. The source scene is not modified. Optimizer
+outputs are searched under `module_b/reconstruction_export/` and copied to
+`module_b/gaussians.ply` and `gaussians_refined.ply`.
+
+For this experimental path, the current PSNR/SSIM/LPIPS in the report are
+still the pre-Module-B ReSplat baseline. The report marks them as provisional;
+the optimized PLY is saved separately for inspection. Post-optimization
+rendering and metric evaluation need to be added after confirming the
+`Reconstruction_full` export contract. Module B timing includes its
+constructor preload and optimization call.
