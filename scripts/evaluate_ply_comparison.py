@@ -329,6 +329,26 @@ def main() -> int:
     print("\nComparison complete")
     print(f"  ReSplat:   PSNR {base['psnr']:.3f}, SSIM {base['ssim']:.3f}, LPIPS {base['lpips']:.3f}")
     print(f"  Optimized: PSNR {opt['psnr']:.3f}, SSIM {opt['ssim']:.3f}, LPIPS {opt['lpips']:.3f}")
+    print(
+        f"  Delta:     PSNR {opt['psnr'] - base['psnr']:+.3f}, "
+        f"SSIM {opt['ssim'] - base['ssim']:+.3f}, "
+        f"LPIPS {opt['lpips'] - base['lpips']:+.3f}"
+    )
+    baseline_score = results["resplat"].get("score_total_100")
+    optimized_score = results["optimized"].get("score_total_100")
+    if baseline_score is not None and optimized_score is not None:
+        print(
+            f"  Score:     {baseline_score:.4f} -> {optimized_score:.4f} "
+            f"({optimized_score - baseline_score:+.4f})"
+        )
+    baseline_seconds = results["resplat"].get("warm_end_to_end_seconds")
+    optimized_seconds = results["optimized"].get("warm_end_to_end_seconds")
+    if baseline_seconds is not None and optimized_seconds is not None:
+        print(
+            f"  Warm time: {baseline_seconds:.3f}s -> {optimized_seconds:.3f}s "
+            f"({optimized_seconds - baseline_seconds:+.3f}s)"
+        )
+    print(f"  Views:      {len(evaluation_names)} at {height}x{width}")
     print(f"  Report: {report_path}")
     return 0
 
