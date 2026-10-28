@@ -140,6 +140,74 @@ def _transform_points_txt(path, world_to_model):
     path.write_text("\n".join(output) + "\n", encoding="utf-8")
 
 
+def _selected_name(name, selected):
+    return name in selected or Path(name).name in selected
+
+
+def _filter_images_bin(path, selected):
+    records = []
+    with path.open("rb") as src:
+        count_bytes = src.read(8)
+        if len(count_bytes) != 8:
+            raise EOFError(f"Truncated COLMAP images file: {path}")
+        count, = struct.unpack("<Q", count_bytes)
+        for _ in range(count):
+            header = src.read(64)
+            if len(header) != 64:
+                raise EOFError(f"Truncated COLMAP image header: {path}")
+            name = _read_cstr(src)
+            point_count_bytes = src.read(8)
+            point_count, = struct.unpack("<Q", point_count_bytes)
+            observations = src.read(point_count * 24)
+            if _selected_name(name.decode("utf-8"), selected):
+                records.append(
+                    header + name + b"\0" + point_count_bytes + observations
+                )
+    with path.open("wb") as dst:
+        dst.write(struct.pack("<Q", len(records)))
+        for record in records:
+            dst.write(record)
+    return len(records)
+
+
+def _filter_images_txt(path, selected):
+    lines = path.read_text(encoding="utf-8").splitlines()
+    comments, records = [], []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            comments.append(line)
+            continue
+        fields = line.split()
+        points_line = lines[index] if index < len(lines) else ""
+        index += 1
+        if len(fields) >= 10 and _selected_name(" ".join(fields[9:]), selected):
+            records.extend((line, points_line))
+    path.write_text(
+        "\n".join(comments + records) + "\n", encoding="utf-8"
+    )
+    return len(records) // 2
+
+
+def _filter_colmap_images(sparse_dir, selected_names):
+    selected = set(selected_names)
+    images_bin, images_txt = sparse_dir / "images.bin", sparse_dir / "images.txt"
+    if images_bin.is_file():
+        count = _filter_images_bin(images_bin, selected)
+    elif images_txt.is_file():
+        count = _filter_images_txt(images_txt, selected)
+    else:
+        raise FileNotFoundError(f"COLMAP images.bin/txt missing at {sparse_dir}")
+    if count != len(selected):
+        raise ValueError(
+            f"Requested {len(selected)} Reconstruction views but retained {count} "
+            "COLMAP image records. Check evaluation_image_names."
+        )
+    return count
+
+
 def _transform_colmap(sparse_dir, reference_c2w):
     reference = np.asarray(reference_c2w, dtype=np.float64)
     if reference.shape != (4, 4):
@@ -220,7 +288,7 @@ def _clear(path):
 def run_reconstruction_full(
     *, initial_ply, scene_path, images_dir, sparse_dir, work_dir, export_dir,
     output_ply, code_root, reference_c2w_original, mode="scene", circle=0,
-    max_frames=60,
+    max_frames=60, selected_image_names=None,
 ):
     initial_ply = Path(initial_ply).resolve()
     scene_path = Path(scene_path).resolve()
@@ -236,11 +304,30 @@ def run_reconstruction_full(
     _clear(export_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     export_dir.mkdir(parents=True, exist_ok=True)
-    (work_dir / "image").symlink_to(image_source, target_is_directory=True)
+    image_stage = work_dir / "image"
+    if selected_image_names:
+        image_stage.mkdir(parents=True, exist_ok=True)
+        for name in selected_image_names:
+            source = image_source / name
+            if not source.is_file():
+                source = image_source / Path(name).name
+            if not source.is_file():
+                raise FileNotFoundError(
+                    f"Selected Reconstruction image is missing: {name}"
+                )
+            destination = image_stage / Path(name).name
+            shutil.copy2(source, destination)
+    else:
+        image_stage.symlink_to(image_source, target_is_directory=True)
     sparse_stage = work_dir / "Sparse" / "0"
     sparse_stage.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(sparse_source, sparse_stage)
     _transform_colmap(sparse_stage, reference_c2w_original)
+    selected_count = None
+    if selected_image_names:
+        selected_count = _filter_colmap_images(
+            sparse_stage, selected_image_names
+        )
     # Reconstruction_full's dense-init convention uses this PLY as its seed.
     staged_seed_ply = sparse_stage / "points3D.ply"
     shutil.copy2(initial_ply, staged_seed_ply)
@@ -291,6 +378,8 @@ def run_reconstruction_full(
         "mode": mode,
         "circle": circle,
         "max_frames": max_frames,
+        "selected_input_view_count": selected_count,
+        "selected_image_names": list(selected_image_names or []),
         "preload_seconds_included_in_module_b": round(preload_seconds, 6),
         "optimization_seconds": round(optimize_seconds, 6),
         "returned_result_type": type(result).__name__,
