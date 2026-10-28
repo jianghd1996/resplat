@@ -49,6 +49,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sparse-dir", default="sparse/0",
                         help="COLMAP model directory relative to --scene.")
     parser.add_argument("--device", default="cuda:0")
+    parser.add_argument(
+        "--start-frame", type=int, default=0,
+        help="First frame in the fixed inference/evaluation window.",
+    )
+    parser.add_argument(
+        "--frame-distance", type=int, default=60,
+        help="Number of consecutive frames in the inference/evaluation window.",
+    )
     parser.add_argument("--t-iter-sec", type=float, default=None,
                         help="Optional classic 3DGS seconds/iteration for the separate official Module B hard-limit check.")
     parser.add_argument(
@@ -91,6 +99,10 @@ def main() -> int:
         raise FileNotFoundError(
             "Scene is missing required COLMAP folders: " + ", ".join(missing)
         )
+    if args.start_frame < 0:
+        raise ValueError("--start-frame must be non-negative.")
+    if args.frame_distance <= 0:
+        raise ValueError("--frame-distance must be positive.")
     if args.t_iter_sec is not None and args.t_iter_sec <= 0:
         raise ValueError("--t-iter-sec must be positive.")
     if args.module_b == "reconstruction_full":
@@ -117,6 +129,8 @@ def main() -> int:
         "--max_save_images", "0",
         "--context_selection", args.context_selection,
         "--seed", str(args.seed),
+        "--start_frame", str(args.start_frame),
+        "--frame_distance", str(args.frame_distance),
     ]
     if args.module_b == "reconstruction_full" or args.export_reconstruction_init:
         cmd.append("--save_reconstruction_init")
