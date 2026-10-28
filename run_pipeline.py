@@ -51,8 +51,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--t-iter-sec", type=float, default=None,
                         help="Optional classic 3DGS seconds/iteration for the separate official Module B hard-limit check.")
-    parser.add_argument("--module-b", choices=("identity",), default="identity",
-                        help="Module B implementation. identity is the reproducible baseline.")
+    parser.add_argument("--module-b", choices=("identity", "reconstruction_full"), default="identity",
+                        help="Module B implementation: identity or optional Reconstruction_full.")
+    parser.add_argument("--reconstruction-code-root", type=Path, default=None,
+                        help="Parent directory containing Reconstruction_full; defaults to the repo root.")
+    parser.add_argument("--reconstruction-mode", default="scene",
+                        help="mode passed to Reconstruction_full.")
+    parser.add_argument("--reconstruction-circle", type=int, default=0,
+                        help="circle passed to Reconstruction_full (default: 0).")
+    parser.add_argument("--reconstruction-max-frames", type=int, default=60,
+                        help="max_frames passed to Reconstruction_full (default: 60).")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the ReSplat command without running it.")
     return parser.parse_args()
@@ -91,6 +99,8 @@ def main() -> int:
         "--context_selection", args.context_selection,
         "--seed", str(args.seed),
     ]
+    if args.module_b == "reconstruction_full":
+        cmd.append("--save_reconstruction_init")
     if args.checkpoint:
         cmd.extend(["--checkpoint", str(args.checkpoint.expanduser().resolve())])
     if args.num_context is not None:
@@ -138,11 +148,38 @@ def main() -> int:
     module_b_start = time.perf_counter()
     module_b_dir = output / "module_b"
     module_b_dir.mkdir(parents=True, exist_ok=True)
-    module_b_ply, module_b_metadata = run_module_b(
-        source_ply=source_ply,
-        output_ply=module_b_dir / "gaussians.ply",
-        method=args.module_b,
-    )
+    if args.module_b == "identity":
+        module_b_ply, module_b_metadata = run_module_b(
+            source_ply=source_ply,
+            output_ply=module_b_dir / "gaussians.ply",
+            method="identity",
+        )
+    else:
+        from src.competition.reconstruction_full_adapter import run_reconstruction_full
+
+        init_ply = inference_dir / "gaussians_model_frame.ply"
+        frame_path = inference_dir / "reconstruction_frame.json"
+        if not init_ply.is_file() or not frame_path.is_file():
+            raise FileNotFoundError(
+                "Missing model-frame initialization PLY or reference camera transform "
+                "for Reconstruction_full."
+            )
+        with frame_path.open(encoding="utf-8") as f:
+            frame_info = json.load(f)
+        module_b_ply, module_b_metadata = run_reconstruction_full(
+            initial_ply=init_ply,
+            scene_path=scene,
+            images_dir=args.images_dir,
+            sparse_dir=args.sparse_dir,
+            work_dir=module_b_dir / "reconstruction_work",
+            export_dir=module_b_dir / "reconstruction_export",
+            output_ply=module_b_dir / "gaussians.ply",
+            code_root=args.reconstruction_code_root or repo_root,
+            reference_c2w_original=frame_info["reference_c2w_original"],
+            mode=args.reconstruction_mode,
+            circle=args.reconstruction_circle,
+            max_frames=args.reconstruction_max_frames,
+        )
     refined_ply = output / "gaussians_refined.ply"
     shutil.copy2(module_b_ply, refined_ply)
     module_b_seconds = time.perf_counter() - module_b_start
@@ -184,6 +221,15 @@ def main() -> int:
     report["quality"]["rendered_resolution"] = stage_timing.get("output_resolution")
     report["quality"]["metric_resolution"] = stage_timing.get("input_resolution")
     report["quality"]["metrics_compare_against_original_input_images"] = True
+    report["quality"]["metrics_source_ply"] = str(source_ply)
+    report["quality"]["metrics_are_post_module_b"] = args.module_b == "identity"
+    if args.module_b == "reconstruction_full":
+        report["score"]["is_provisional_pre_module_b_quality"] = True
+        report["score"]["note"] = (
+            "Metrics in this report describe the original ReSplat PLY. "
+            "The Reconstruction_full output PLY is saved separately and has not "
+            "yet been re-rendered for post-optimization metrics."
+        )
     report["quality"]["context_selection"] = metrics_config.get(
         "context_selection", args.context_selection
     )
@@ -206,6 +252,8 @@ def main() -> int:
 
     print(f"\nPipeline complete: {output}")
     print(f"  PLY: {refined_ply}")
+    if args.module_b == "reconstruction_full":
+        print("  Metrics in this report are the ReSplat pre-optimization baseline.")
     print(f"  PNG renders: {inference_dir / 'rendered'}")
     print(f"  Render/metric resolution: {stage_timing.get('output_resolution')}")
     print(f"  Report: {report_path}")

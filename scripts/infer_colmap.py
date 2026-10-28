@@ -906,6 +906,7 @@ def save_outputs(
     save_images=True, save_ply=False, save_depth=False,
     context_image_names=None, context_images=None,
     visualization_dump=None, rendered_depth=None, max_save_images=10,
+    save_reconstruction_init=False,
 ):
     """Save rendered images, depth maps, and Gaussians (PLY)."""
     os.makedirs(output_dir, exist_ok=True)
@@ -1012,6 +1013,16 @@ def save_outputs(
                 align_to_view=True,
             )
             print(f"Saved Gaussian PLY to {ply_path}")
+            if save_reconstruction_init:
+                init_ply_path = Path(output_dir) / "gaussians_model_frame.ply"
+                export_ply(
+                    batch["context"]["extrinsics"][0, mid_idx],
+                    gaussians.means[0], gaussians.scales[0],
+                    gaussians.rotations[0], gaussians.harmonics[0],
+                    gaussians.opacities[0], init_ply_path,
+                    align_to_view=False,
+                )
+                print(f"Saved model-frame initialization PLY to {init_ply_path}")
         except Exception as e:
             print(f"Warning: Failed to save PLY: {e}")
 
@@ -1344,6 +1355,12 @@ def parse_args():
         help="Save Gaussians as PLY file",
     )
     parser.add_argument(
+        "--save_reconstruction_init",
+        action="store_true",
+        default=False,
+        help="Save a Gaussian PLY in ReSplat's normalized middle-context frame for Reconstruction_full",
+    )
+    parser.add_argument(
         "--render_chunk_size",
         type=int,
         default=10,
@@ -1539,6 +1556,16 @@ def run_scene(args, scene_path, scene_name, output_dir,
         f"{rendered.shape[-2]}x{rendered.shape[-1]}"
     )
 
+    if args.save_reconstruction_init:
+        reference_index = context_indices[len(context_indices) // 2]
+        frame_info = {
+            "coordinate_frame": "middle_context_camera",
+            "reference_image_name": scene_data["image_names"][reference_index],
+            "reference_c2w_original": scene_data["c2w"][reference_index].tolist(),
+        }
+        with open(os.path.join(output_dir, "reconstruction_frame.json"), "w") as f:
+            json.dump(frame_info, f, indent=2)
+
     # Save outputs
     print(f"\nSaving outputs to {output_dir}...")
     target_image_names = [scene_data["image_names"][i] for i in target_indices]
@@ -1557,6 +1584,7 @@ def run_scene(args, scene_path, scene_name, output_dir,
         context_image_names=context_image_names,
         context_images=context_images_native,
         visualization_dump=visualization_dump,
+        save_reconstruction_init=args.save_reconstruction_init,
         rendered_depth=rendered_depth,
         max_save_images=args.max_save_images,
     )
