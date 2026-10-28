@@ -165,7 +165,10 @@ def main() -> int:
     args = parse_args()
     scene = args.scene.expanduser().resolve()
     pipeline_output = args.pipeline_output.expanduser().resolve()
-    baseline_ply = (args.baseline_ply or pipeline_output / "resplat" / "gaussians.ply").resolve()
+    baseline_ply = (
+        args.baseline_ply
+        or pipeline_output / "resplat" / "gaussians_model_frame.ply"
+    ).resolve()
     optimized_ply = (args.optimized_ply or pipeline_output / "module_b" / "gaussians.ply").resolve()
     output = (args.output or pipeline_output / "comparison").resolve()
     frame_path = pipeline_output / "resplat" / "reconstruction_frame.json"
