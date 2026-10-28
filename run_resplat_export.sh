@@ -6,6 +6,8 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 DEVICE="${DEVICE:-cuda:0}"
 SCENE="${SCENE:-$REPO_ROOT/datasets/dl3dv-colmap-demo/02267acf6fb98de36173bf4e7db9734c8c421dcb00267e42964dc15134cbb1be}"
 RUN_DIR="${RUN_DIR:-$REPO_ROOT/results/competition/demo_reconstruction_full}"
+START_FRAME="${START_FRAME:-0}"
+FRAME_DISTANCE="${FRAME_DISTANCE:-60}"
 
 cd "$REPO_ROOT"
 
@@ -14,6 +16,8 @@ cd "$REPO_ROOT"
   --output "$RUN_DIR" \
   --module-b none \
   --export-reconstruction-init \
+  --start-frame "$START_FRAME" \
+  --frame-distance "$FRAME_DISTANCE" \
   --device "$DEVICE"
 
 echo
