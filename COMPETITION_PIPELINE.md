@@ -168,4 +168,8 @@ first run. Metrics use the original image resolution. Results are written under
 `$RUN_DIR/comparison/resplat`, `$RUN_DIR/comparison/optimized`, and
 `$RUN_DIR/comparison/comparison_report.json`. The comparison report contains
 PSNR, SSIM, LPIPS, the 80-point quality subtotal for each result, and deltas.
+When the first-stage and optimizer timing reports are present, it also reports
+the 30-second time component and 100-point total for both results. The optimized
+runtime is the ReSplat data-to-output time plus the Docker optimizer stage time;
+offline comparison rendering and metric computation stay excluded.
 
