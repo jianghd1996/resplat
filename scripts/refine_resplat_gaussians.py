@@ -361,9 +361,14 @@ def main() -> int:
         frame_info = json.load(file)
     with metrics_path.open(encoding="utf-8") as file:
         metrics_info = json.load(file)
-    evaluation_names = metrics_info.get("config", {}).get("evaluation_image_names")
+    metrics_config = metrics_info.get("config", {})
+    evaluation_names = metrics_config.get("evaluation_image_names")
     if not evaluation_names:
         raise ValueError("metrics.json has no fixed evaluation_image_names list")
+    training_names = (
+        metrics_config.get("optimization_image_names")
+        or evaluation_names
+    )
 
     scene_data = load_colmap_scene(
         str(scene), args.sparse_dir, args.images_dir
@@ -371,10 +376,10 @@ def main() -> int:
     index_by_name = {
         name: index for index, name in enumerate(scene_data["image_names"])
     }
-    missing = [name for name in evaluation_names if name not in index_by_name]
+    missing = [name for name in training_names if name not in index_by_name]
     if missing:
-        raise ValueError(f"Evaluation images are missing: {missing[:5]}")
-    indices = [index_by_name[name] for name in evaluation_names]
+        raise ValueError(f"Optimization images are missing: {missing[:5]}")
+    indices = [index_by_name[name] for name in training_names]
     image_paths = [scene_data["image_paths"][index] for index in indices]
     sizes = {Image.open(path).size for path in image_paths}
     if len(sizes) != 1:
@@ -442,9 +447,9 @@ def main() -> int:
         )
     optimizer = torch.optim.Adam(param_groups, eps=1e-15)
 
-    verify_count = min(max(args.verify_views, 1), len(evaluation_names))
+    verify_count = min(max(args.verify_views, 1), len(training_names))
     verify_indices = np.linspace(
-        0, len(evaluation_names) - 1, verify_count, dtype=int
+        0, len(training_names) - 1, verify_count, dtype=int
     ).tolist()
 
     if device.type == "cuda":
@@ -466,11 +471,11 @@ def main() -> int:
     # Split the ordered trajectory into spatially separated bins. Each optimizer
     # update draws one view from every bin, then accumulates gradients across
     # those views before changing any Gaussian parameter.
-    views_per_update = min(args.views_per_update, len(evaluation_names))
+    views_per_update = min(args.views_per_update, len(training_names))
     view_bins = [
         values.tolist()
         for values in np.array_split(
-            np.arange(len(evaluation_names)), views_per_update
+            np.arange(len(training_names)), views_per_update
         )
         if len(values)
     ]
@@ -556,7 +561,8 @@ def main() -> int:
         "best_step": best_step,
         "batch_size": args.batch_size,
         "views_per_update": views_per_update,
-        "training_view_count": len(evaluation_names),
+        "training_view_count": len(training_names),
+        "held_out_evaluation_view_count": len(evaluation_names),
         "training_view_renders": args.steps * views_per_update,
         "verification_view_count": verify_count,
         "native_resolution": f"{height}x{width}",
