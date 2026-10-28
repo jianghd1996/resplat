@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 
 import numpy as np
+from PIL import Image
+from scipy.optimize import linear_sum_assignment
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -120,12 +122,26 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def image_fingerprint(path: Path) -> np.ndarray:
+    with Image.open(path) as image:
+        pixels = np.asarray(
+            image.convert("RGB").resize((32, 32), Image.Resampling.BILINEAR),
+            dtype=np.float32,
+        ) / 255.0
+    feature = pixels.reshape(-1)
+    return (feature - feature.mean()) / max(float(feature.std()), 1e-6)
+
+
 def resolve_image_pairs(
     scene_data, original_by_name, final_images, final_by_name, pipeline_output
 ):
     exact = sorted(set(original_by_name) & set(final_by_name))
     if len(exact) >= 3:
-        return [(name, name) for name in exact], "exact_basename"
+        return (
+            [(name, name) for name in exact],
+            "exact_basename",
+            {"matched_count": len(exact)},
+        )
 
     metrics_path = pipeline_output / "resplat" / "metrics.json"
     evaluation_names = []
@@ -156,6 +172,7 @@ def resolve_image_pairs(
     work_dir = pipeline_output / "module_b" / "reconstruction_work"
     final_names = set(final_by_name)
     renamed_paths = {}
+    files_by_parent = {}
     image_extensions = {
         ".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"
     }
@@ -167,6 +184,7 @@ def resolve_image_pairs(
                 and path.name in final_names
             ):
                 renamed_paths.setdefault(path.name, []).append(path)
+                files_by_parent.setdefault(path.parent, {})[path.name] = path
 
     hash_pairs = []
     used_originals = set()
@@ -178,7 +196,11 @@ def resolve_image_pairs(
                 used_originals.add(original_name)
                 break
     if len(hash_pairs) >= 3:
-        return sorted(hash_pairs), "sha256_image_content"
+        return (
+            sorted(hash_pairs),
+            "sha256_image_content",
+            {"matched_count": len(hash_pairs)},
+        )
 
     final_order = [
         Path(image.name).name
@@ -187,8 +209,59 @@ def resolve_image_pairs(
     evaluation_names = [
         name for name in evaluation_names if name in original_by_name
     ]
+    # Reconstruction may resize or re-encode copied images. Select the folder
+    # with the best coverage of final COLMAP names, then solve a global
+    # one-to-one visual assignment against the fixed evaluation images.
+    if files_by_parent and len(evaluation_names) == len(final_order):
+        image_parent, final_files = max(
+            files_by_parent.items(),
+            key=lambda item: (len(item[1]), -len(item[0].parts)),
+        )
+        if all(name in final_files for name in final_order):
+            original_features = np.stack([
+                image_fingerprint(original_path_by_name[name])
+                for name in evaluation_names
+            ])
+            final_features = np.stack([
+                image_fingerprint(final_files[name])
+                for name in final_order
+            ])
+            distances = np.mean(
+                (original_features[:, None] - final_features[None, :]) ** 2,
+                axis=2,
+            )
+            original_indices, final_indices = linear_sum_assignment(distances)
+            pairs = [
+                (evaluation_names[i], final_order[j])
+                for i, j in zip(original_indices, final_indices)
+            ]
+            matched_distances = distances[original_indices, final_indices]
+            second_best = np.partition(distances, 1, axis=1)[:, 1]
+            confidence_ratio = matched_distances / np.maximum(
+                second_best[original_indices], 1e-12
+            )
+            return (
+                pairs,
+                "perceptual_hungarian",
+                {
+                    "renamed_image_directory": str(image_parent),
+                    "mean_fingerprint_mse": float(matched_distances.mean()),
+                    "max_fingerprint_mse": float(matched_distances.max()),
+                    "mean_matched_to_second_best_ratio": float(
+                        confidence_ratio.mean()
+                    ),
+                    "max_matched_to_second_best_ratio": float(
+                        confidence_ratio.max()
+                    ),
+                },
+            )
+
     if len(final_order) == len(evaluation_names) and len(final_order) >= 3:
-        return list(zip(evaluation_names, final_order)), "recorded_order_fallback"
+        return (
+            list(zip(evaluation_names, final_order)),
+            "recorded_order_fallback",
+            {"warning": "No image-content mapping was available."},
+        )
 
     raise ValueError(
         "Could not map Reconstruction image names to original images. "
@@ -236,7 +309,7 @@ def main() -> int:
     final_by_name = {
         Path(image.name).name: image for image in final_images.values()
     }
-    image_pairs, mapping_method = resolve_image_pairs(
+    image_pairs, mapping_method, mapping_details = resolve_image_pairs(
         scene_data, original_by_name, final_images, final_by_name,
         pipeline_output,
     )
@@ -324,6 +397,7 @@ def main() -> int:
         "colmap_final": str(colmap_final),
         "matched_image_count": len(image_pairs),
         "image_mapping_method": mapping_method,
+        "image_mapping_details": mapping_details,
         "image_name_pairs": [
             {"original": original_name, "reconstruction": final_name}
             for original_name, final_name in image_pairs
