@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -42,6 +43,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--far", type=float, default=200.0)
     parser.add_argument("--render-chunk-size", type=int, default=4)
     return parser.parse_args()
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _field(vertex, name):
@@ -164,6 +173,14 @@ def main() -> int:
     for path in (scene, baseline_ply, optimized_ply, frame_path, baseline_metrics_path):
         if not path.exists():
             raise FileNotFoundError(path)
+    baseline_sha256 = sha256(baseline_ply)
+    optimized_sha256 = sha256(optimized_ply)
+    if baseline_sha256 == optimized_sha256:
+        raise ValueError(
+            "Baseline and optimized PLY files have identical SHA-256 content. "
+            "Pass --optimized-ply pointing to Reconstruction_full's final "
+            "result_gs/.../point_cloud/iteration_N/point_cloud.ply."
+        )
 
     with frame_path.open(encoding="utf-8") as f:
         frame_info = json.load(f)
@@ -257,6 +274,10 @@ def main() -> int:
         "resolution": f"{height}x{width}",
         "same_views_and_native_resolution": True,
         "coordinate_frame": frame_info.get("coordinate_frame"),
+        "ply_sha256": {
+            "resplat": baseline_sha256,
+            "optimized": optimized_sha256,
+        },
         "results": results,
         "optimized_minus_resplat": {
             "psnr": round(opt["psnr"] - base["psnr"], 4),
