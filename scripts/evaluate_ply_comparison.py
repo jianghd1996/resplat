@@ -139,6 +139,19 @@ def quality_score(metrics):
     return components, round(sum(components.values()), 4)
 
 
+def add_full_score(result, warm_seconds):
+    if warm_seconds is None:
+        result["warm_end_to_end_seconds"] = None
+        result["score_total_100"] = None
+        return
+    time_component = round(score_time_efficiency(float(warm_seconds), 30.0), 4)
+    result["warm_end_to_end_seconds"] = round(float(warm_seconds), 6)
+    result["time_score_component"] = time_component
+    result["score_total_100"] = round(
+        result["quality_score_total_80"] + time_component, 4
+    )
+
+
 def main() -> int:
     args = parse_args()
     scene = args.scene.expanduser().resolve()
@@ -201,6 +214,28 @@ def main() -> int:
             "rendered_dir": str(result_dir / "rendered"),
         }
 
+    baseline_report_path = pipeline_output / "performance_quality_report.json"
+    optimizer_report_path = pipeline_output / "module_b" / "reconstruction_full_report.json"
+    baseline_warm_seconds = None
+    resplat_output_seconds = None
+    if baseline_report_path.is_file():
+        with baseline_report_path.open(encoding="utf-8") as f:
+            baseline_report = json.load(f)
+        timing = baseline_report.get("timing", {})
+        baseline_warm_seconds = timing.get("warm_end_to_end_seconds")
+        resplat_output_seconds = timing.get("data_to_saved_model_outputs_seconds")
+    optimizer_seconds = None
+    if optimizer_report_path.is_file():
+        with optimizer_report_path.open(encoding="utf-8") as f:
+            optimizer_report = json.load(f)
+        optimizer_seconds = optimizer_report.get("stage_wall_seconds")
+
+    add_full_score(results["resplat"], baseline_warm_seconds)
+    optimized_warm_seconds = None
+    if resplat_output_seconds is not None and optimizer_seconds is not None:
+        optimized_warm_seconds = float(resplat_output_seconds) + float(optimizer_seconds)
+    add_full_score(results["optimized"], optimized_warm_seconds)
+
     base, opt = results["resplat"]["metrics"], results["optimized"]["metrics"]
     report = {
         "schema_version": 1,
@@ -218,6 +253,20 @@ def main() -> int:
             "quality_score_total_80": round(
                 results["optimized"]["quality_score_total_80"]
                 - results["resplat"]["quality_score_total_80"], 4
+            ),
+            "warm_end_to_end_seconds": (
+                round(optimized_warm_seconds - baseline_warm_seconds, 6)
+                if optimized_warm_seconds is not None and baseline_warm_seconds is not None
+                else None
+            ),
+            "score_total_100": (
+                round(
+                    results["optimized"]["score_total_100"]
+                    - results["resplat"]["score_total_100"], 4
+                )
+                if results["optimized"]["score_total_100"] is not None
+                and results["resplat"]["score_total_100"] is not None
+                else None
             ),
         },
     }
