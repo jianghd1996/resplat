@@ -538,6 +538,25 @@ def select_context_views(c2w, num_context, strategy="fps", seed=0):
         raise ValueError(f"Unknown context selection strategy: {strategy}")
 
 
+def select_stratified_evaluation_views(num_images, count, seed=0):
+    """Choose a fixed, trajectory-covering random held-out evaluation subset."""
+    if count is None or count >= num_images:
+        return np.arange(num_images)
+    if count <= 0:
+        raise ValueError("evaluation_count must be positive")
+    # Avoid the two trajectory endpoints when possible so the selected cameras
+    # are interpolation rather than extrapolation views.
+    candidates = (
+        np.arange(1, num_images - 1)
+        if num_images - 2 >= count
+        else np.arange(num_images)
+    )
+    bins = np.array_split(candidates, count)
+    rng = np.random.default_rng(seed)
+    selected = [int(rng.choice(values)) for values in bins if len(values)]
+    return np.asarray(sorted(selected), dtype=int)
+
+
 def select_target_views(num_images, context_indices, target_selection="remaining",
                         num_target=None):
     """Select target views for rendering.
@@ -1299,7 +1318,22 @@ def parse_args():
         type=str,
         default="all",
         choices=["remaining", "all"],
-        help="Views to render and evaluate: all selected scene views (including context) or only non-context views",
+        help="Views to render and evaluate when --evaluation_count is not set.",
+    )
+    parser.add_argument(
+        "--evaluation_count",
+        type=int,
+        default=None,
+        help=(
+            "Fixed held-out evaluation view count. Views are sampled once with "
+            "stratified seeded randomness and excluded from context/refinement."
+        ),
+    )
+    parser.add_argument(
+        "--evaluation_seed",
+        type=int,
+        default=2026,
+        help="Seed for the fixed stratified held-out evaluation subset.",
     )
 
     # Resolution
@@ -1463,18 +1497,50 @@ def run_scene(args, scene_path, scene_name, output_dir,
     num_context = args.num_context if args.num_context is not None else num_total
     num_context = min(num_context, num_total)
 
-    context_indices = select_context_views(
-        scene_data["c2w"], num_context, args.context_selection, args.seed,
-    )
-    target_indices = select_target_views(
-        num_total, context_indices, args.target_selection, args.num_target
-    )
+    if args.evaluation_count is not None:
+        target_indices = select_stratified_evaluation_views(
+            num_total, args.evaluation_count, args.evaluation_seed
+        )
+        optimization_indices = np.setdiff1d(
+            np.arange(num_total), target_indices
+        )
+        if len(optimization_indices) < num_context:
+            raise ValueError(
+                f"Held-out evaluation leaves {len(optimization_indices)} views, "
+                f"fewer than num_context={num_context}"
+            )
+        local_context = select_context_views(
+            scene_data["c2w"][optimization_indices],
+            num_context,
+            args.context_selection,
+            args.seed,
+        )
+        context_indices = optimization_indices[local_context]
+        selection_description = (
+            f"stratified_random_holdout(seed={args.evaluation_seed})"
+        )
+    else:
+        context_indices = select_context_views(
+            scene_data["c2w"], num_context, args.context_selection, args.seed,
+        )
+        target_indices = select_target_views(
+            num_total, context_indices, args.target_selection, args.num_target
+        )
+        optimization_indices = np.setdiff1d(
+            np.arange(num_total), target_indices
+        )
+        selection_description = args.target_selection
+
     print(f"  Context: {len(context_indices)} views (strategy: {args.context_selection})")
-    print(f"  Evaluation/render views: {len(target_indices)} (selection: {args.target_selection}; includes context: {bool(np.intersect1d(target_indices, context_indices).size)})")
+    print(
+        f"  Evaluation/render views: {len(target_indices)} "
+        f"(selection: {selection_description}; includes context: "
+        f"{bool(np.intersect1d(target_indices, context_indices).size)})"
+    )
+    print(f"  Module B optimization views: {len(optimization_indices)}")
 
     if len(target_indices) == 0:
-        print("  Warning: No target views selected. Using all views as targets.")
-        target_indices = np.arange(num_total)
+        raise ValueError("No evaluation views selected")
 
     context_image_paths = [scene_data["image_paths"][i] for i in context_indices]
     target_image_paths = [scene_data["image_paths"][i] for i in target_indices]
@@ -1624,6 +1690,17 @@ def run_scene(args, scene_path, scene_name, output_dir,
             "num_target": len(target_indices),
             "context_image_names": context_image_names,
             "evaluation_image_names": target_image_names,
+            "evaluation_count": len(target_indices),
+            "evaluation_seed": args.evaluation_seed,
+            "evaluation_strategy": (
+                "stratified_random_holdout"
+                if args.evaluation_count is not None
+                else args.target_selection
+            ),
+            "optimization_image_names": [
+                scene_data["image_names"][i] for i in optimization_indices
+            ],
+            "optimization_view_count": len(optimization_indices),
             "evaluation_includes_context_views": bool(
                 np.intersect1d(target_indices, context_indices).size
             ),
