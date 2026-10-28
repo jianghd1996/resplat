@@ -82,6 +82,14 @@ def main() -> int:
         )
     if args.t_iter_sec is not None and args.t_iter_sec <= 0:
         raise ValueError("--t-iter-sec must be positive.")
+    if args.module_b == "reconstruction_full":
+        code_root = (args.reconstruction_code_root or repo_root).expanduser().resolve()
+        if not ((code_root / "Reconstruction_full").is_dir()
+                or (code_root / "Reconstruction_full.py").is_file()):
+            raise FileNotFoundError(
+                "Reconstruction_full is not available under "
+                f"{code_root}. Pass --reconstruction-code-root to its parent folder."
+            )
 
     output.mkdir(parents=True, exist_ok=True)
     inference_dir = output / "resplat"
