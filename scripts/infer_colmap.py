@@ -1010,6 +1010,7 @@ def save_outputs(
                 gaussians.harmonics[0],
                 gaussians.opacities[0],
                 ply_path,
+                covariances=gaussians.covariances[0],
                 align_to_view=True,
             )
             print(f"Saved Gaussian PLY to {ply_path}")
@@ -1020,6 +1021,7 @@ def save_outputs(
                     gaussians.means[0], gaussians.scales[0],
                     gaussians.rotations[0], gaussians.harmonics[0],
                     gaussians.opacities[0], init_ply_path,
+                    covariances=gaussians.covariances[0],
                     align_to_view=False,
                 )
                 print(f"Saved model-frame initialization PLY to {init_ply_path}")
@@ -1853,3 +1855,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
