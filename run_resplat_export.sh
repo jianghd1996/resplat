@@ -8,6 +8,8 @@ SCENE="${SCENE:-$REPO_ROOT/datasets/dl3dv-colmap-demo/02267acf6fb98de36173bf4e7d
 RUN_DIR="${RUN_DIR:-$REPO_ROOT/results/competition/demo_reconstruction_full}"
 START_FRAME="${START_FRAME:-0}"
 FRAME_DISTANCE="${FRAME_DISTANCE:-60}"
+EVALUATION_COUNT="${EVALUATION_COUNT:-20}"
+EVALUATION_SEED="${EVALUATION_SEED:-2026}"
 
 cd "$REPO_ROOT"
 
@@ -18,6 +20,8 @@ cd "$REPO_ROOT"
   --export-reconstruction-init \
   --start-frame "$START_FRAME" \
   --frame-distance "$FRAME_DISTANCE" \
+  --evaluation-count "$EVALUATION_COUNT" \
+  --evaluation-seed "$EVALUATION_SEED" \
   --device "$DEVICE"
 
 echo
