@@ -37,23 +37,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--images-dir", default="images_4")
     parser.add_argument("--sparse-dir", default="sparse/0")
     parser.add_argument("--device", default="cuda:0")
-    parser.add_argument("--steps", type=int, default=30)
+    parser.add_argument(
+        "--steps", type=int, default=8,
+        help="Number of optimizer updates, not the number of rendered view batches.",
+    )
     parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument(
+        "--views-per-update", type=int, default=8,
+        help="Stratified views whose gradients are accumulated before each update.",
+    )
     parser.add_argument(
         "--mode",
         choices=("appearance_only", "geometry_lite", "full"),
         default="geometry_lite",
     )
-    parser.add_argument("--appearance-warmup-steps", type=int, default=10)
-    parser.add_argument("--verify-views", type=int, default=4)
-    parser.add_argument("--verify-every", type=int, default=5)
+    parser.add_argument("--appearance-warmup-steps", type=int, default=2)
+    parser.add_argument("--verify-views", type=int, default=8)
+    parser.add_argument("--verify-every", type=int, default=2)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--lambda-ssim", type=float, default=0.2)
-    parser.add_argument("--lr-sh", type=float, default=2.5e-3)
-    parser.add_argument("--lr-opacity", type=float, default=1.0e-3)
-    parser.add_argument("--lr-means", type=float, default=2.0e-6)
-    parser.add_argument("--lr-scales", type=float, default=2.0e-5)
-    parser.add_argument("--lr-quats", type=float, default=1.0e-5)
+    parser.add_argument("--lr-sh", type=float, default=2.5e-4)
+    parser.add_argument("--lr-opacity", type=float, default=1.0e-4)
+    parser.add_argument("--lr-means", type=float, default=2.0e-7)
+    parser.add_argument("--lr-scales", type=float, default=2.0e-6)
+    parser.add_argument("--lr-quats", type=float, default=1.0e-6)
     parser.add_argument(
         "--max-position-delta",
         type=float,
@@ -320,8 +327,11 @@ def evaluate_objective(
 
 def main() -> int:
     args = parse_args()
-    if args.steps < 0 or args.batch_size < 1:
-        raise ValueError("--steps must be non-negative and --batch-size must be positive")
+    if args.steps < 0 or args.batch_size < 1 or args.views_per_update < 1:
+        raise ValueError(
+            "--steps must be non-negative; --batch-size and "
+            "--views-per-update must be positive"
+        )
     if not 0.0 <= args.lambda_ssim <= 1.0:
         raise ValueError("--lambda-ssim must be in [0, 1]")
 
@@ -453,9 +463,17 @@ def main() -> int:
         f"L1={initial_objective['l1']:.6f}, SSIM={initial_objective['ssim']:.6f}"
     )
 
-    order = list(range(len(evaluation_names)))
-    random.Random(args.seed).shuffle(order)
-    cursor = 0
+    # Split the ordered trajectory into spatially separated bins. Each optimizer
+    # update draws one view from every bin, then accumulates gradients across
+    # those views before changing any Gaussian parameter.
+    views_per_update = min(args.views_per_update, len(evaluation_names))
+    view_bins = [
+        values.tolist()
+        for values in np.array_split(
+            np.arange(len(evaluation_names)), views_per_update
+        )
+        if len(values)
+    ]
 
     for step in range(1, args.steps + 1):
         if optimize_geometry and step == args.appearance_warmup_steps + 1:
@@ -467,22 +485,31 @@ def main() -> int:
                 elif group["name"] == "quats":
                     group["lr"] = args.lr_quats
 
-        if cursor + args.batch_size > len(order):
-            random.Random(args.seed + step).shuffle(order)
-            cursor = 0
-        selected = order[cursor:cursor + args.batch_size]
-        cursor += args.batch_size
-
-        target = targets_cpu[selected].to(device, non_blocking=True)
-        prediction = render(
-            params, sh_degree, c2w[selected], intrinsics[selected],
-            width, height, args.near, args.far,
-        )
-        loss, _, _ = reconstruction_loss(
-            prediction, target, args.lambda_ssim
-        )
+        selected = [
+            values[(step - 1) % len(values)]
+            for values in view_bins
+        ]
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        accumulated_loss = 0.0
+        for start in range(0, len(selected), args.batch_size):
+            micro_indices = selected[start:start + args.batch_size]
+            target = targets_cpu[micro_indices].to(
+                device, non_blocking=True
+            )
+            prediction = render(
+                params, sh_degree, c2w[micro_indices],
+                intrinsics[micro_indices], width, height,
+                args.near, args.far,
+            )
+            micro_loss, _, _ = reconstruction_loss(
+                prediction, target, args.lambda_ssim
+            )
+            weight = len(micro_indices) / len(selected)
+            (micro_loss * weight).backward()
+            accumulated_loss += float(micro_loss) * weight
+
+        if not math.isfinite(accumulated_loss):
+            raise FloatingPointError(f"Non-finite loss at step {step}")
         optimizer.step()
         constrain_parameters(
             params,
@@ -491,9 +518,6 @@ def main() -> int:
             args.max_position_delta,
             args.max_log_scale_delta,
         )
-
-        if not torch.isfinite(loss):
-            raise FloatingPointError(f"Non-finite loss at step {step}")
 
         should_verify = (
             step == args.steps
@@ -531,7 +555,9 @@ def main() -> int:
         "steps_requested": args.steps,
         "best_step": best_step,
         "batch_size": args.batch_size,
+        "views_per_update": views_per_update,
         "training_view_count": len(evaluation_names),
+        "training_view_renders": args.steps * views_per_update,
         "verification_view_count": verify_count,
         "native_resolution": f"{height}x{width}",
         "gaussian_count": int(params["means"].shape[0]),
