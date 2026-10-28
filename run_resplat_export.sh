@@ -12,7 +12,7 @@ cd "$REPO_ROOT"
 "$PYTHON_BIN" run_pipeline.py \
   --scene "$SCENE" \
   --output "$RUN_DIR" \
-  --module-b identity \
+  --module-b none \
   --export-reconstruction-init \
   --device "$DEVICE"
 
