@@ -159,20 +159,22 @@ def _transform_colmap(sparse_dir, reference_c2w):
         raise FileNotFoundError(f"COLMAP images.bin/txt missing at {sparse_dir}")
 
 
-def _return_plys(value, export_dir):
+def _return_plys(value, search_roots):
     found = []
     if isinstance(value, (str, Path)):
         path = Path(value).expanduser()
-        if not path.is_absolute():
-            path = export_dir / path
-        if path.is_file() and path.suffix.lower() == ".ply":
-            found.append(path.resolve())
+        candidates = [path] if path.is_absolute() else [
+            Path(root) / path for root in search_roots
+        ]
+        for candidate in candidates:
+            if candidate.is_file() and candidate.suffix.lower() == ".ply":
+                found.append(candidate.resolve())
     elif isinstance(value, dict):
         for item in value.values():
-            found.extend(_return_plys(item, export_dir))
+            found.extend(_return_plys(item, search_roots))
     elif isinstance(value, (tuple, list)):
         for item in value:
-            found.extend(_return_plys(item, export_dir))
+            found.extend(_return_plys(item, search_roots))
     return found
 
 
@@ -181,14 +183,31 @@ def _iteration(path):
     return int(numbers[-1]) if numbers else -1
 
 
-def _find_output_ply(result, export_dir):
-    returned = _return_plys(result, export_dir)
-    candidates = returned or [p.resolve() for p in export_dir.rglob("*.ply") if p.is_file()]
+def _find_output_ply(result, export_dir, work_dir, excluded=()):
+    search_roots = (export_dir, work_dir)
+    returned = _return_plys(result, search_roots)
+    excluded = {Path(path).resolve() for path in excluded}
+    candidates = list(returned)
+    for root in search_roots:
+        candidates.extend(p.resolve() for p in root.rglob("*.ply") if p.is_file())
+    candidates = list(dict.fromkeys(
+        path for path in candidates if path not in excluded
+    ))
     if not candidates:
         raise FileNotFoundError(
-            f"Reconstruction_full returned no PLY and none was found under {export_dir}"
+            "Reconstruction_full returned no PLY and none was found under "
+            f"{export_dir} or {work_dir}"
         )
-    return max(candidates, key=lambda p: (_iteration(p), p.stat().st_mtime_ns, p.stat().st_size)), bool(returned)
+    selected = max(
+        candidates,
+        key=lambda p: (
+            _iteration(p),
+            p in returned,
+            p.stat().st_mtime_ns,
+            p.stat().st_size,
+        ),
+    )
+    return selected, selected in returned
 
 
 def _clear(path):
@@ -223,7 +242,8 @@ def run_reconstruction_full(
     shutil.copytree(sparse_source, sparse_stage)
     _transform_colmap(sparse_stage, reference_c2w_original)
     # Reconstruction_full's dense-init convention uses this PLY as its seed.
-    shutil.copy2(initial_ply, sparse_stage / "points3D.ply")
+    staged_seed_ply = sparse_stage / "points3D.ply"
+    shutil.copy2(initial_ply, staged_seed_ply)
     # Support both the case used in the supplied call and the lowercase path
     # used by scripts/reconstruction in VideoX-Fun.
     (work_dir / "sparse").symlink_to("Sparse", target_is_directory=True)
@@ -250,7 +270,9 @@ def run_reconstruction_full(
         circle=circle, max_frames=max_frames,
     )
     optimize_seconds = time.perf_counter() - run_start
-    selected, returned_path = _find_output_ply(result, export_dir)
+    selected, returned_path = _find_output_ply(
+        result, export_dir, work_dir, excluded=(staged_seed_ply,)
+    )
     with selected.open("rb") as f:
         if f.readline().strip() != b"ply":
             raise ValueError(f"Reconstruction_full output is not a PLY: {selected}")
@@ -275,3 +297,4 @@ def run_reconstruction_full(
         "returned_result_keys": list(result.keys()) if isinstance(result, dict) else None,
         "output_matches_initial_ply": initial_ply.read_bytes() == output_ply.read_bytes(),
     }
+
