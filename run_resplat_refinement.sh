@@ -13,6 +13,11 @@ REFINE_BATCH_SIZE="${REFINE_BATCH_SIZE:-2}"
 REFINE_VIEWS_PER_UPDATE="${REFINE_VIEWS_PER_UPDATE:-8}"
 REFINE_MODE="${REFINE_MODE:-geometry_lite}"
 REFINE_SEED="${REFINE_SEED:-0}"
+REFINE_LR_SH="${REFINE_LR_SH:-2.5e-4}"
+REFINE_LR_OPACITY="${REFINE_LR_OPACITY:-1.0e-4}"
+REFINE_LR_MEANS="${REFINE_LR_MEANS:-2.0e-7}"
+REFINE_LR_SCALES="${REFINE_LR_SCALES:-2.0e-6}"
+REFINE_LR_QUATS="${REFINE_LR_QUATS:-1.0e-6}"
 
 cd "$REPO_ROOT"
 
@@ -26,7 +31,12 @@ cd "$REPO_ROOT"
   --batch-size "$REFINE_BATCH_SIZE" \
   --views-per-update "$REFINE_VIEWS_PER_UPDATE" \
   --mode "$REFINE_MODE" \
-  --seed "$REFINE_SEED"
+  --seed "$REFINE_SEED" \
+  --lr-sh "$REFINE_LR_SH" \
+  --lr-opacity "$REFINE_LR_OPACITY" \
+  --lr-means "$REFINE_LR_MEANS" \
+  --lr-scales "$REFINE_LR_SCALES" \
+  --lr-quats "$REFINE_LR_QUATS"
 
 echo
 echo "Direct refinement complete:"
