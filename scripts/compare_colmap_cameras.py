@@ -199,12 +199,12 @@ def match_images(input_images, output_images):
     input_by_name = {Path(image["name"]).name: image for image in input_images.values()}
     output_by_name = {Path(image["name"]).name: image for image in output_images.values()}
     common_names = sorted(set(input_by_name) & set(output_by_name))
-    if len(common_names) == len(input_images) == len(output_images):
+    if len(common_names) == len(output_images):
         return [
             (input_by_name[name], output_by_name[name]) for name in common_names
         ], "exact_image_name"
     common_ids = sorted(set(input_images) & set(output_images))
-    if len(common_ids) == len(input_images) == len(output_images):
+    if len(common_ids) == len(output_images):
         return [
             (input_images[image_id], output_images[image_id])
             for image_id in common_ids
@@ -244,7 +244,9 @@ def main():
             "max_intrinsics_relative_error": intrinsic_error,
         })
 
-    fully_matched = len(pairs) == len(input_images) == len(output_images)
+    # Reconstruction may intentionally retain only max_frames from a larger
+    # input COLMAP model. Every output view must map back to an input view.
+    fully_matched = len(pairs) == len(output_images)
     unchanged = (
         fully_matched
         and max(center_errors, default=float("inf")) <= args.center_tolerance
