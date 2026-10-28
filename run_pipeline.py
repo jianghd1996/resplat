@@ -57,6 +57,14 @@ def parse_args() -> argparse.Namespace:
         "--frame-distance", type=int, default=60,
         help="Number of consecutive frames in the inference/evaluation window.",
     )
+    parser.add_argument(
+        "--evaluation-count", type=int, default=None,
+        help="Fixed stratified held-out evaluation view count.",
+    )
+    parser.add_argument(
+        "--evaluation-seed", type=int, default=2026,
+        help="Seed for fixed held-out evaluation view selection.",
+    )
     parser.add_argument("--t-iter-sec", type=float, default=None,
                         help="Optional classic 3DGS seconds/iteration for the separate official Module B hard-limit check.")
     parser.add_argument(
@@ -103,6 +111,8 @@ def main() -> int:
         raise ValueError("--start-frame must be non-negative.")
     if args.frame_distance <= 0:
         raise ValueError("--frame-distance must be positive.")
+    if args.evaluation_count is not None and args.evaluation_count <= 0:
+        raise ValueError("--evaluation-count must be positive.")
     if args.t_iter_sec is not None and args.t_iter_sec <= 0:
         raise ValueError("--t-iter-sec must be positive.")
     if args.module_b == "reconstruction_full":
@@ -132,6 +142,11 @@ def main() -> int:
         "--start_frame", str(args.start_frame),
         "--frame_distance", str(args.frame_distance),
     ]
+    if args.evaluation_count is not None:
+        cmd.extend([
+            "--evaluation_count", str(args.evaluation_count),
+            "--evaluation_seed", str(args.evaluation_seed),
+        ])
     if args.module_b == "reconstruction_full" or args.export_reconstruction_init:
         cmd.append("--save_reconstruction_init")
     if args.checkpoint:
