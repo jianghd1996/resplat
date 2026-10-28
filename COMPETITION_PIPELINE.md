@@ -110,3 +110,62 @@ the optimized PLY is saved separately for inspection. Post-optimization
 rendering and metric evaluation need to be added after confirming the
 `Reconstruction_full` export contract. Module B timing includes its
 constructor preload and optimization call.
+
+## Split ReSplat and Reconstruction_full environments
+
+Use this path when Reconstruction_full runs in a Docker environment that is
+incompatible with the ReSplat Python environment.
+
+### 1. ReSplat environment: infer and export the optimizer input
+
+```bash
+export SCENE="/mnt/DataPart/z00566689/mnt/Hackathon_dev/resplat/datasets/dl3dv-colmap-demo/02267acf6fb98de36173bf4e7db9734c8c421dcb00267e42964dc15134cbb1be"
+export RUN_DIR="/mnt/DataPart/z00566689/mnt/Hackathon_dev/resplat/results/competition/demo_reconstruction_full"
+
+python run_pipeline.py \
+  --scene "$SCENE" \
+  --output "$RUN_DIR" \
+  --module-b identity \
+  --export-reconstruction-init \
+  --device cuda:0
+```
+
+This writes the ReSplat baseline to `$RUN_DIR/resplat/gaussians.ply` and the
+cross-environment optimizer input to
+`$RUN_DIR/resplat/gaussians_model_frame.ply` plus
+`$RUN_DIR/resplat/reconstruction_frame.json`.
+
+### 2. Reconstruction_full Docker: optimize the exported Gaussian
+
+Mount the repository, scene, and run directory at paths visible inside the
+container, then run:
+
+```bash
+python scripts/run_reconstruction_full_stage.py \
+  --scene "$SCENE" \
+  --pipeline-output "$RUN_DIR" \
+  --reconstruction-code-root "$PWD" \
+  --mode scene \
+  --circle 0 \
+  --max-frames 60
+```
+
+The optimized result is written to `$RUN_DIR/module_b/gaussians.ply`.
+The stage timing and selected optimizer output are recorded in
+`$RUN_DIR/module_b/reconstruction_full_report.json`.
+
+### 3. ReSplat environment: render both PLY files and compare quality
+
+```bash
+python scripts/evaluate_ply_comparison.py \
+  --scene "$SCENE" \
+  --pipeline-output "$RUN_DIR" \
+  --device cuda:0
+```
+
+Both PLY files are rendered again on the exact image-name list recorded by the
+first run. Metrics use the original image resolution. Results are written under
+`$RUN_DIR/comparison/resplat`, `$RUN_DIR/comparison/optimized`, and
+`$RUN_DIR/comparison/comparison_report.json`. The comparison report contains
+PSNR, SSIM, LPIPS, the 80-point quality subtotal for each result, and deltas.
+
